@@ -1,6 +1,11 @@
 """Keep automated tests isolated from credentials and external side effects."""
 
 import os
+import sys
+
+# Add /app to the Python path so imports like 'from src...' work
+if "/app" not in sys.path:
+    sys.path.insert(0, "/app")
 
 
 # pytest imports this module before application modules.  Explicit values here
