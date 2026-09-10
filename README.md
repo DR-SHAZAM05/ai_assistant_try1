@@ -1,27 +1,27 @@
 # Personal Academic AI Assistant
 
-Asistent AI personal, modular și extensibil dedicat mediului academic (studenți și cadre didactice UNITBV), capabil să interacționeze prin interfață conversațională Telegram cu e-mailul personal, e-mailul instituțional UNITBV, Google Calendar, surse de știri configurabile, un Knowledge Base de practică pe ani universitari și un sistem de memorie și action items.
+Asistent AI modular dezvoltat pentru mediul academic (studenți și cadre didactice UNITBV), capabil să interacționeze printr-o interfață conversațională de Telegram cu e-mailul personal, e-mailul instituțional UNITBV, Google Calendar, surse configurabile de știri și o bază de cunoștințe de practică structurată pe ani universitari.
 
 ---
 
-## 🌟 Caracteristici Cheie
+## Caracteristici Principale
 
-- **Interfață conversațională Telegram**: Înțelegere în limbaj natural fără comenzi rigide obligatorii, tastatură persistentă de navigare rapidă și **butoane inline de acțiune directă** (`[ ✉️ Răspunde ]`, `[ ✉️ Trimite ]`, `[ ❌ Anulează ]`, `[ ✅ Finalizează #ID ]`).
-- **AI Orchestrator Central**: Detecție automată de intenții și executare multi-tool (Email, Calendar, Practică, Ştiri, Task-uri, Generare Documente).
-- **Generare Automată Documente Oficiale (.docx)**: Generare dinamică și descărcare directă în Telegram pentru **Convenția-cadru** și **Caietul de practică** UNITBV.
-- **Integrări Email Duble**: Suport pentru contul personal și contul instituțional `@student.unitbv.ro` / `@unitbv.ro` cu extragere automată de sarcini și detectare urgențe.
-- **Integrator Practică UNITBV ↔ KB**: Clasificare automată a e-mailurilor legate de practică (convenții, caiete, adeverințe, colocviu, Erasmus) și salvare de rezumate (Question/Answer summaries).
-- **Practice Knowledge Base & RAG cu Ani Universitari**: Căutare semantică în regulamente și date istorice structurate pe ani școlari (ex: `2025-2026`, `2026-2027`).
-- **Google Calendar Assistant**: Consultare orar și evenimente prin Google Calendar API v3 cu Service Account sau OAuth, și detectare de suprapuneri.
-- **News Agent Configurabil**: Citire RSS reală din surse YAML, deduplicare și calcul de relevanță pe topicuri de interes IT și AI.
-- **Human-in-the-Loop**: Confirmare obligatorie din Telegram pentru acțiuni sensibile (trimitere e-mailuri, modificare calendar) prin butoane inline de aprobare.
-- **Arhitectură Hibridă Rezilientă LLM (Cloud ↔ Local Ollama Fallback)**: Suport pentru OpenAI / Google Gemini, cu **fallback automat și transparent pe modelul local Ollama (`qwen2.5:1.5b`)** în caz de erori de rețea sau depășire a cotelor API (HTTP 429).
-- **Notificări Proactive & Programate (n8n & CLI)**: 4 fluxuri automate (Daily Briefing matinal, Alerte Termene Practică UNITBV, Refresh Știri, Polling E-mailuri Urgente) gestionabile prin n8n și CLI-ul `scripts/run_automation.py`.
-- **Backup & Disaster Recovery Criptografic (SHA-256)**: Procedură automată de backup pentru PostgreSQL și colecția vectorială Qdrant, cu verificare SHA-256 și alertă push pe Telegram.
+- **Interfață conversațională Telegram**: Comunicare în limbaj natural, meniu de comenzi rapide și butoane inline pentru acțiuni directe (`[Răspunde]`, `[Trimite]`, `[Anulează]`, `[Finalizează #ID]`).
+- **AI Orchestrator Central**: Rutare automată a intențiilor și coordonare multi-agent (Email, Calendar, Practică, Știri, Sarcini, Generare Documente).
+- **Generare documente oficiale (.docx)**: Generare automată și transmitere direct în chat-ul de Telegram a Convenției-cadru și a Caietului de practică structurat pe 3 săptămâni.
+- **Suport cont dublu de e-mail**: Conectare simultană la contul personal și cel instituțional (`@student.unitbv.ro` / `@unitbv.ro`), clasificare automată a mesajelor și extragere de acțiuni/deadline-uri.
+- **Modul dedicat pentru practica UNITBV**: Identificare automată a mesajelor referitoare la practică (convenții, caiete, adeverințe, colocviu, Erasmus) și salvarea rezumatelor în istoricul deciziilor.
+- **Knowledge Base & RAG multi-anual**: Căutare semantică în regulamente și ghiduri organizate pe ani universitari (2024-2025, 2025-2026, 2026-2027) și într-o secțiune generală stabilă pentru regulamente permanente.
+- **Integrare Google Calendar**: Consultare orar, identificare eveniment următor, verificare intervale orare libere/ocupate și programare evenimente prin Google Calendar API v3.
+- **Agregator de știri tehnologice**: Preluare surse RSS definite în `config/news.yaml`, deduplicare articole și calcul al scorului de relevanță pentru topicuri IT și AI.
+- **Human-in-the-Loop**: Confirmare obligatorie a utilizatorului din Telegram înainte de trimiterea oricărui e-mail sau modificare în calendar.
+- **Provider LLM hibrid**: Execuție primară prin cloud (Gemini / OpenAI), cu comutare automată pe runtime-ul local Ollama (`qwen2.5:1.5b`) în caz de erori de conexiune sau depășire a cotelor de utilizare.
+- **Automatizări și notificări**: Fluxuri n8n și utilitar CLI (`scripts/run_automation.py`) pentru briefing matinal pe 5 secțiuni, monitorizare termene limită și alertare e-mailuri urgente.
+- **Disaster Recovery și backup**: Salvarea bazei de date PostgreSQL și a snapshot-ului vectorial Qdrant cu verificare criptografică SHA-256.
 
 ---
 
-## 🏗️ Arhitectură Generală
+## Arhitectură Generală
 
 ```text
                +---------------------------------------------+
@@ -58,7 +58,7 @@ Asistent AI personal, modular și extensibil dedicat mediului academic (studenț
                    v
 +-------------------------------------+  +-----------------------------------+
 |         PostgreSQL (Relational)     |  |       Qdrant (Vector Database)    |
-| - Mesaje & Memorie Conversațională  |  | - Embeddings Ghid Practică UNITBV  |
+| - Mesaje & Memorie Conversațională  |  | - Embeddings Ghid Practică UNITBV |
 | - Sarcini & Action Items            |  | - nomic-embed-text (768 dim)       |
 | - Audit Log & Verificări Ingestion  |  +-----------------------------------+
 +-------------------------------------+
@@ -74,16 +74,16 @@ Asistent AI personal, modular și extensibil dedicat mediului academic (studenț
 
 ---
 
-## 📁 Structura Proiectului
+## Structura Proiectului
 
 ```text
 personal-academic-ai-assistant/
 │
-├── README.md                      # Prezentare proiect & Ghid de pornire
-├── .env.example                   # Template configurare mediu
-├── .gitignore                     # Excluderi Git
-├── .dockerignore                  # Excluderi din contextul de build Docker
-├── Dockerfile                     # Dockerfile optimizat pentru FastAPI backend
+├── README.md                      # Documentație principală a proiectului
+├── .env.example                   # Șablon configurare variabile de mediu
+├── .gitignore                     # Reguli ignorare Git
+├── .dockerignore                  # Excluderi context build Docker
+├── Dockerfile                     # Configurație build pentru backend FastAPI
 ├── docker-compose.yml             # Servicii (App, Postgres, Qdrant, n8n, Ollama)
 ├── requirements.txt               # Dependențe Python
 ├── pyproject.toml                 # Configurații proiect și pytest
@@ -95,162 +95,181 @@ personal-academic-ai-assistant/
 │       ├── news_refresh.json
 │       └── practice_deadlines.json
 │
-├── config/                        # Fișiere YAML de configurare
+├── config/                        # Fișiere de configurare dinamice
+│   ├── news.yaml
 │   ├── news.example.yaml
+│   ├── practice.yaml
 │   └── practice.example.yaml
 │
 ├── scripts/                       # Instrumente de operare și automatizare
-│   ├── run_automation.py          # CLI unificat pentru rulat joburi & briefing
-│   ├── backup.py                  # Dump PostgreSQL + Snapshot Qdrant (SHA-256)
-│   ├── restore.py                 # Restaurare din backup cu verificare SHA-256
+│   ├── run_automation.py          # Utilitar CLI unificat pentru joburi automate
+│   ├── backup.py                  # Salvare PostgreSQL + Snapshot Qdrant (SHA-256)
+│   ├── restore.py                 # Restaurare date cu verificare de integritate
 │   └── authorize_google_calendar.py
 │
 ├── src/
-│   └── app/                       # Codul sursă Python
-│       ├── main.py                # Punctul de intrare FastAPI & Healthchecks
-│       ├── api/                   # Rute HTTP (Telegram, Automation, Health)
-│       ├── core/                  # Configurații (.env), Securitate, Logging, Retry
-│       ├── orchestrator/          # AI Orchestrator & Tool Registry
+│   └── app/                       # Codul sursă al aplicației
+│       ├── main.py                # Inițializare FastAPI și endpoint-uri de sănătate
+│       ├── api/                   # Rute HTTP (Telegram webhook, automatizări, health)
+│       ├── core/                  # Configurații (.env), securitate, logging
+│       ├── orchestrator/          # Detecție intenții și coordonare unelte
 │       ├── agents/                # Agenți specializați (Email, Calendar, News, Practice)
-│       ├── llm/                   # Abstracție LLM cu Ollama Fallback automat
+│       ├── llm/                   # Abstracție LLM cu mecanism de fallback pe Ollama
 │       ├── integrations/          # Conectori externi (Telegram, Google, IMAP/SMTP)
-│       ├── rag/                   # Chunking, Ingestion, Embeddings, Retrieval
-│       ├── memory/                # Memorie conversațională și Action Items
-│       ├── database/              # Modele SQLAlchemy și Repositories
-│       └── services/              # Generare Documente (.docx), Email, News
+│       ├── rag/                   # Chunking, embeddings, vector store Qdrant, retrieval
+│       ├── memory/                # Memorie conversațională și persistență sarcini
+│       ├── database/              # Modele SQLAlchemy și sesiune asincronă
+│       └── services/              # Servicii de business logic (Docx, Email, News, Calendar)
 │
-├── database/                      # Migrații Alembic și scripturi de seed
-├── knowledge_base/                # Documente RAG pe ani universitari
+├── database/                      # Migrații de schemă Alembic
+├── knowledge_base/                # Ghiduri de practică pe ani și regulament cadru
 │   ├── 2024-2025/
 │   ├── 2025-2026/
-│   └── 2026-2027/
-├── docs/                          # Documentație tehnică detaliată (arhitectură, ghid, securitate, comparație LLM)
-└── tests/                         # Teste Unitare (120 teste 100% verzi)
+│   ├── 2026-2027/
+│   └── general/
+├── docs/                          # Documentație tehnică (arhitectură, demo, comparație LLM)
+└── tests/                         # Suită completă de teste unitare și de integrare
 ```
 
 ---
 
-## 🚀 Ghid Rapid de Instalare (Development)
+## Ghid de Instalare și Pornire
 
 ### Cerințe Preliminare
 - Python 3.14
-- Docker Desktop & Docker Compose
+- Docker Desktop și Docker Compose
 - Git
 
-### 1. Clonare repository și creare mediu virtual
+### 1. Clonare repository și configurare mediu virtual
 
 ```powershell
 git clone https://github.com/user/ai_assistant_try1.git
 cd ai_assistant_try1
+
 py -3.14 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
+.\.venv\Scripts\Activate.ps1   # Pe Linux/Mac: source .venv/bin/activate
 
-### 2. Instalare dependențe
-
-```powershell
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 3. Configurare Mediu (`.env`)
+### 2. Configurare variabile de mediu (`.env`)
 
-Copiați fișierul de exemplu și completați cheile API și credențialele:
+Copiați fișierul de exemplu și completați valorile specifice:
 
 ```powershell
-Copy-Item .env.example .env
+Copy-Item .env.example .env    # Pe Linux/Mac: cp .env.example .env
 ```
 
-### 4. Pornire infrastructură locală prin Docker Compose
+Parametri esențiali:
+- `TELEGRAM_BOT_TOKEN`: token eliberat de `@BotFather`
+- `OPENAI_API_KEY`: cheie API OpenAI sau Gemini
+- Credențiale cont personal și cont instituțional UNITBV (IMAP/SMTP)
+- Pentru dezvoltare locală fără servicii externe active, setarea `ALLOW_MOCK_PROVIDERS=true` permite rularea pe date simulate locale.
+
+### 3. Pornire infrastructură cu Docker Compose
 
 ```powershell
+# 1. Pornire servicii suport (PostgreSQL, Qdrant, n8n, Ollama)
 docker compose up -d postgres qdrant n8n ollama
+
+# 2. Descărcare model embeddings și model local în Ollama
 docker compose run --rm ollama-init
+
+# 3. Rulare migrații de bază de date
 docker compose --profile tools run --rm migrate
+
+# 4. Pornire aplicație backend
 docker compose up -d --build app
 ```
 
-### 5. Ingestie Knowledge Base Practică
+### 4. Ingestia documentelor de practică în Qdrant
 
 ```powershell
 python -m src.app.rag.ingest
 ```
 
-### 6. Verificare backend FastAPI
+### 5. Verificare stare aplicație
+
+Puteți verifica endpoint-ul de readiness:
 
 ```powershell
 Invoke-RestMethod http://localhost:8000/health/ready
 ```
 
+Răspunsul așteptat este `{"status":"ready"}`.
+
 Endpoint-uri utile:
-- Swagger Docs: `http://localhost:8000/docs`
-- Health Liveness: `http://localhost:8000/health/live`
-- Health Readiness: `http://localhost:8000/health/ready`
-- Dependencies Audit: `http://localhost:8000/health/dependencies`
+- Documentație Swagger: `http://localhost:8000/docs`
+- Verificare Liveness: `http://localhost:8000/health/live`
+- Verificare Readiness: `http://localhost:8000/health/ready`
+- Audit dependințe: `http://localhost:8000/health/dependencies`
+- Panou n8n: `http://localhost:5678`
 
 ---
 
-## ⚡ Automatizări & Notificări Proactive (CLI & n8n)
+## Automatizări și Joburi Programate (`scripts/run_automation.py`)
 
-Sistemul include un utilitar unificat de execuție a joburilor de automatizare (`scripts/run_automation.py`):
+Utilitarul CLI unificat permite execuția manuală sau programată prin Task Scheduler / cron a fluxurilor:
 
 ```powershell
-# 1. Briefing matinal zilnic (Calendar + Sarcini + Top Știri) trimis pe Telegram:
+# Briefing matinal complet (Calendar, Email, Practică UNITBV, Sarcini, Știri):
 python scripts/run_automation.py --job briefing
 
-# 2. Verificarea termenelor limită de practică UNITBV și emitere alertă:
+# Verificare termene limită practică (28 august, 2 septembrie) și emitere alertă:
 python scripts/run_automation.py --job deadlines
 
-# 3. Refresh agregator știri tehnologice:
+# Actualizare fluxuri de știri tehnologice:
 python scripts/run_automation.py --job news
 
-# 4. Polling căsuțe de email (Personal & UNITBV) și alertă la mesaje urgente:
+# Verificare căsuțe e-mail pentru mesaje urgente:
 python scripts/run_automation.py --job email
 
-# 5. Rulare backup complet (PostgreSQL + Qdrant) cu notificare Telegram:
+# Backup complet PostgreSQL și Qdrant:
 python scripts/run_automation.py --job backup
 
-# 6. Executare simultană a tuturor joburilor:
+# Rulare simultană a tuturor joburilor:
 python scripts/run_automation.py --job all
 ```
 
 ---
 
-## 🛡️ Backup & Disaster Recovery
+## Backup și Disaster Recovery
 
-Procedura este protejată prin validare criptografică:
-- **Creare Backup:**
+Procedura include verificarea integrității datelor prin sume de control:
+
+- **Creare Backup**:
   ```powershell
   python -m scripts.backup --output-dir backups
   ```
   Generează `postgres.dump`, `qdrant.snapshot` și `manifest.json` cu sumele SHA-256.
-- **Restaurare din Backup:**
+
+- **Restaurare din Backup**:
   ```powershell
   python -m scripts.restore backups/<timestamp> --yes
   ```
 
 ---
 
-## 🗓️ Roadmap Milestones
+## Securitate și Izolare
 
-Toate etapele proiectului au fost implementate, testate și validate:
-
-- [x] **M0: Analiză și Arhitectură** (Structură directoare, modele date, docs arhitectură, Docker Compose)
-- [x] **M1: Infrastructură & Telegram MVP** (FastAPI, Docker, memorie conversațională PostgreSQL, webhook securizat)
-- [x] **M2: Email Agent + UNITBV** (IMAP/SMTP dublu, extragere acțiuni/sarcini, clasificare mesaje)
-- [x] **M3: Calendar + News Agent** (Google Calendar API v3 cu Service Account, agregator RSS cu ranking)
-- [x] **M4: Practice Knowledge Base + RAG & Docx Generator** (Qdrant, nomic-embed-text, generare Convenție și Caiet .docx)
-- [x] **M5: Tastaturi Interactive & Human-in-the-Loop** (Meniu persistent, butoane inline Approve/Reject/Complete)
-- [x] **M6: Knowledge Base Multi-anual & Action Items** (Filtrare per an universitar, management sarcini)
-- [x] **M7: Resilient LLM Runtime** (OpenAI/Gemini cloud cu fallback automat la nivel de provider pe Ollama local `qwen2.5:1.5b`)
-- [x] **M8: Automatizări Proactive, n8n & Backup Disaster Recovery** (Briefing matinal, alerte termene, dump PostgreSQL + snapshot Qdrant SHA-256)
-- [x] **M9: Final Delivery & Packaging** (120/120 teste unitare și de integrare 100% verzi, documentație tehnică completă, comparație Cloud vs Local LLM)
+- **Gestionare credențiale**: Nu există chei sau parole hardcodate în codul sursă; configurarea se realizează exclusiv prin variabile de mediu `.env` excluse din Git.
+- **Mecanism Human-in-the-Loop**: Orice acțiune cu impact extern (trimitere e-mail sau modificare în calendar) este oprită în starea `pending_approval` până la confirmarea explicită prin butoane inline în Telegram.
+- **Izolare date**: Baza relațională și vector store-ul rulează în rețeaua Docker internă, nefiind expuse public în mod direct.
+- **Integritate SHA-256**: Procedura de restaurare validează sumele fiecărui fișier înainte de aplicarea modificărilor.
 
 ---
 
-## 🛡️ Securitate și Confidențialitate
+## Testare Automată
 
-- **Fără chei hardcodate**: Toate credențialele sunt stocate în fișierul `.env` (exclus din Git).
-- **Human Approval**: Orice acțiune cu efect extern (trimitere e-mail, modificare calendar) necesită confirmare directă din Telegram prin butoane inline.
-- **Strict Data Isolation**: Informațiile sensibile și fișierele de practică sunt stocate exclusiv în instanțele locale ale bazei de date.
-- **Criptografie SHA-256**: Orice restaurare din backup verifică integritatea fișierelor înainte de aplicare.
+Aplicația dispune de o suită completă de teste unitare și de integrare, acoperind toate fluxurile principale și cerințele specifice de testare (T1-T5):
+
+```powershell
+# Rulare în interiorul containerului Docker:
+docker exec -e PYTHONPATH=. academic_ai_app pytest -v
+
+# Rulare pe mașina gazdă:
+pytest -v
+```
+
+> Suita curentă: **129 teste trecute cu succes (100% verzi)**.
