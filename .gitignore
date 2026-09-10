@@ -1,0 +1,82 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+.venv-*/
+.venv-validation/
+env.bak/
+venv.bak/
+
+# Environment Variables & Secrets (CRITICAL)
+.env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+*.pem
+*.key
+*.cert
+*.crt
+client_secret*.json
+credentials.json
+token.json
+secrets/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing & Coverage
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.pytest-result.xml
+.pytest-*.xml
+.mypy_cache/
+
+# Database & Storage
+*.sqlite
+*.db
+data/
+qdrant_storage/
+postgres_data/
+
+# Logs
+logs/
+*.log
+
+# n8n local data
+.n8n/
+# Backups - local only
+backups/
+# Local configuration
+config/news.yaml
+config/practice.yaml

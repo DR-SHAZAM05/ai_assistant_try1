@@ -1,0 +1,33 @@
+# Practice Knowledge Base & Integration Configuration
+practice:
+  current_academic_year: "2026-2027"
+
+  categories:
+    - conventie
+    - adeverinta
+    - caiet_practica
+    - colocviu
+    - companie
+    - ore_practica
+    - erasmus
+    - situatie_speciala
+
+  keywords:
+    - practica
+    - conventie
+    - caiet
+    - adeverinta
+    - ore
+    - tutore
+    - colocviu
+    - responsabil practica
+    - erasmus
+    - staj
+
+  auto_classification_rules:
+    - tag: erasmus
+      match_terms: ["erasmus", "mobilitate", "bursa strainatate"]
+    - tag: conventie
+      match_terms: ["conventie de practica", "semnatura firma", "anexa 1"]
+    - tag: caiet
+      match_terms: ["caiet de practica", "raport saptamanal", "activitate zilnica"]

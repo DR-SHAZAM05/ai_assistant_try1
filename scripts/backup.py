@@ -1,0 +1,121 @@
+"""Create a PostgreSQL dump and a Qdrant collection snapshot for disaster recovery."""
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+import httpx
+
+from src.app.core.config import settings
+
+
+def _timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def backup_postgres(destination: Path) -> Path:
+    executable = shutil.which("pg_dump")
+    environment = os.environ.copy()
+    environment["PGPASSWORD"] = settings.POSTGRES_PASSWORD
+    if executable:
+        subprocess.run(
+            [
+                executable,
+                "--host", settings.POSTGRES_HOST,
+                "--port", str(settings.POSTGRES_PORT),
+                "--username", settings.POSTGRES_USER,
+                "--format", "custom",
+                "--file", str(destination),
+                settings.POSTGRES_DB,
+            ],
+            check=True,
+            env=environment,
+        )
+        return destination
+
+    docker = shutil.which("docker")
+    container = settings.POSTGRES_DOCKER_CONTAINER
+    if not docker or not container:
+        raise RuntimeError(
+            "pg_dump was not found. Install PostgreSQL client tools or set POSTGRES_DOCKER_CONTAINER for Docker Compose."
+        )
+    with destination.open("wb") as output:
+        subprocess.run(
+            [
+                docker,
+                "exec",
+                "-i",
+                "-e",
+                "PGPASSWORD",
+                container,
+                "pg_dump",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "5432",
+                "--username",
+                settings.POSTGRES_USER,
+                "--format",
+                "custom",
+                settings.POSTGRES_DB,
+            ],
+            check=True,
+            env=environment,
+            stdout=output,
+        )
+    return destination
+
+
+def backup_qdrant(destination: Path) -> Path:
+    base_url = settings.effective_qdrant_url.rstrip("/")
+    headers = {"api-key": settings.QDRANT_API_KEY} if settings.QDRANT_API_KEY else {}
+    with httpx.Client(timeout=settings.EXTERNAL_REQUEST_TIMEOUT_SECONDS, headers=headers) as client:
+        response = client.post(f"{base_url}/collections/{settings.QDRANT_COLLECTION}/snapshots")
+        response.raise_for_status()
+        snapshot_name = response.json()["result"]["name"]
+        snapshot = client.get(
+            f"{base_url}/collections/{settings.QDRANT_COLLECTION}/snapshots/{snapshot_name}"
+        )
+        snapshot.raise_for_status()
+    destination.write_bytes(snapshot.content)
+    return destination
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Back up PostgreSQL and the configured Qdrant collection.")
+    parser.add_argument("--output-dir", default="backups", help="Directory for the backup set.")
+    args = parser.parse_args()
+
+    output_dir = Path(args.output_dir) / _timestamp()
+    output_dir.mkdir(parents=True, exist_ok=False)
+    postgres_file = backup_postgres(output_dir / "postgres.dump")
+    qdrant_file = backup_qdrant(output_dir / "qdrant.snapshot")
+    manifest = {
+        "format_version": 2,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "postgres_database": settings.POSTGRES_DB,
+        "qdrant_collection": settings.QDRANT_COLLECTION,
+        "artifacts": {
+            "postgres_dump": {"file": postgres_file.name, "bytes": postgres_file.stat().st_size, "sha256": _sha256(postgres_file)},
+            "qdrant_snapshot": {"file": qdrant_file.name, "bytes": qdrant_file.stat().st_size, "sha256": _sha256(qdrant_file)},
+        },
+    }
+    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    print(f"Backup created: {output_dir}")
+
+
+if __name__ == "__main__":
+    main()

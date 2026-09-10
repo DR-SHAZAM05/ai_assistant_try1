@@ -1,0 +1,186 @@
+services:
+  # -------------------------------------------------------------
+  # 1. FastAPI Application Service
+  # -------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: academic_ai_app
+    restart: unless-stopped
+    ports:
+      - "${APP_BIND_ADDRESS:-127.0.0.1}:${PORT:-8000}:8000"
+    env_file:
+      - ${ENV_FILE:-.env}
+    environment:
+      - TZ=Europe/Bucharest
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      # Let Settings build an encoded URL from the internal PostgreSQL fields.
+      # This safely supports passwords containing URL-reserved characters.
+      - DATABASE_URL=
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - QDRANT_URL=http://qdrant:6333
+      - OLLAMA_BASE_URL=http://ollama:11434
+    volumes:
+      - ./src:/app/src
+      - ./secrets:/app/secrets
+      - ./knowledge_base:/app/knowledge_base
+      - ./config:/app/config
+      - ./tests:/app/tests
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - assistant_net
+
+  # -------------------------------------------------------------
+  # 2. PostgreSQL Relational Database
+  # -------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    container_name: academic_ai_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_password_here}
+      POSTGRES_DB: ${POSTGRES_DB:-academic_assistant_db}
+    ports:
+      - "${POSTGRES_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - assistant_net
+
+  # -------------------------------------------------------------
+  # 3. Qdrant Vector Database (RAG Search)
+  # -------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:v1.19.0@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc
+    container_name: academic_ai_qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_BIND_ADDRESS:-127.0.0.1}:${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_BIND_ADDRESS:-127.0.0.1}:6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    healthcheck:
+      # The official Qdrant image does not include curl or wget. Bash is present
+      # and this verifies that the HTTP listener accepts a local TCP connection.
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/6333'"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks:
+      - assistant_net
+
+  # -------------------------------------------------------------
+  # 4. n8n Automation Engine
+  # -------------------------------------------------------------
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.37.4@sha256:3ef785400f1a03361584e5533a2e3eb72de56311fd4dc996ac4031a7fdede8bc
+    container_name: academic_ai_n8n
+    restart: unless-stopped
+    ports:
+      - "${N8N_BIND_ADDRESS:-127.0.0.1}:${N8N_PORT:-5678}:5678"
+    environment:
+      - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - NODE_ENV=production
+      - N8N_WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://localhost:5678/}
+      - AUTOMATION_API_KEY=${AUTOMATION_API_KEY:-}
+    volumes:
+      - n8n_data:/home/node/.n8n
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:5678/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      - assistant_net
+
+  # -------------------------------------------------------------
+  # 5. Ollama Local LLM Runtime
+  # -------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:0.33.1@sha256:075246f72d4109385b4a01c3ac8e9cbd26a0bcb21cd7aa30edbccd24e1b3180c
+    container_name: academic_ai_ollama
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_BIND_ADDRESS:-127.0.0.1}:${OLLAMA_PORT:-11435}:11434"
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    volumes:
+      - ollama_storage:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+    networks:
+      - assistant_net
+
+  # Download the configured local models before the application starts. The
+  # Ollama volume makes this a no-op after the first successful run.
+  ollama-init:
+    image: ollama/ollama:0.33.1@sha256:075246f72d4109385b4a01c3ac8e9cbd26a0bcb21cd7aa30edbccd24e1b3180c
+    restart: "no"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        ollama pull "$${OLLAMA_INIT_CHAT_MODEL}"
+        ollama pull "$${OLLAMA_INIT_EMBEDDING_MODEL}"
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_INIT_CHAT_MODEL: ${OLLAMA_INIT_CHAT_MODEL:-qwen2.5:1.5b}
+      OLLAMA_INIT_EMBEDDING_MODEL: ${OLLAMA_INIT_EMBEDDING_MODEL:-nomic-embed-text}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - assistant_net
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - ${ENV_FILE:-.env}
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - DATABASE_URL=
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - tools
+    networks:
+      - assistant_net
+
+volumes:
+  postgres_data:
+  qdrant_storage:
+  n8n_data:
+  ollama_storage:
+
+networks:
+  assistant_net:
+    driver: bridge
