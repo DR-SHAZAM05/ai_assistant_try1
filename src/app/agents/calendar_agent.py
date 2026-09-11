@@ -1,7 +1,8 @@
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from src.app.services.calendar_service import CalendarService
 from src.app.llm.factory import get_llm_provider
 from src.app.core.logging import logger
+from src.app.core.config import settings
 
 
 class CalendarAgent:
@@ -62,18 +63,19 @@ class CalendarAgent:
             if "not been used in project" in err_str or "accessnotconfigured" in err_str or "disabled" in err_str:
                 msg = (
                     "📅 **Google Calendar API nu este activat în Google Cloud Console.**\n\n"
-                    "Activează API-ul dând click pe linkul direct din proiectul tău:\n"
-                    "👉 https://console.developers.google.com/apis/api/calendar-json.googleapis.com/overview?project=717531530848\n\n"
+                    "Activează API-ul dând click pe linkul din Google Cloud Console:\n"
+                    "👉 https://console.developers.google.com/apis/api/calendar-json.googleapis.com/overview\n\n"
                     "Apasă butonul albastru **ENABLE (Activează)**, iar apoi reîntreabă-mă despre programul tău!"
                 )
             elif "not found" in err_str or "does not have access" in err_str or "404" in err_str:
+                sa_email = settings.google_service_account_email or "adresa de e-mail a Service Account-ului Google"
                 msg = (
                     "📅 **Calendarul tău nu a fost încă partajat cu asistentul AI.**\n\n"
                     "Pentru a-mi permite să-ți citesc orarul:\n"
                     "1. Deschide Google Calendar în browser (https://calendar.google.com)\n"
                     "2. În stânga, dă click pe cele 3 puncte de lângă calendarul tău -> **Settings and sharing**\n"
                     "3. La secțiunea **Share with specific people**, apasă **Add people** și adaugă:\n"
-                    "`proiect-practica-2026@practica-proiect.iam.gserviceaccount.com`\n"
+                    f"`{sa_email}`\n"
                     "4. Setează permisiunea: *'See all event details'*."
                 )
             else:

@@ -6,6 +6,9 @@
 
 Sistemul nostru a fost conceput modular, permițând comutarea transparentă a nucleului de inteligență artificială prin abstractizarea `LLMProvider` (`src/app/llm/factory.py`) și variabila de mediu `LLM_PROVIDER` (`gemini`, `openai`, `ollama`), fără modificarea logicii agenților sau a orchestratorului.
 
+> [!NOTE]
+> **Compatibilitate Google Gemini**: Integrarea Google Gemini este asigurată direct prin endpoint-ul compatibil OpenAI (`https://generativelanguage.googleapis.com/v1beta/openai/`), configurabil prin `LLM_PROVIDER=gemini` sau `LLM_PROVIDER=openai` cu `OPENAI_BASE_URL`. Aceasta elimină dependențele externe suplimentare, menținând un client asincron uniform și robust.
+
 ---
 
 ## 2. Matricea Comparativă Sintetică

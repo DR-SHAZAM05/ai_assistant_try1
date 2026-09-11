@@ -12,10 +12,11 @@ class OpenAIProvider(LLMProvider):
     OpenAI API Provider implementation for LLM completions and embeddings.
     """
 
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None, base_url: Optional[str] = None):
         self.api_key = api_key or settings.OPENAI_API_KEY
         self.model = model or settings.DEFAULT_MODEL
         self.embedding_model = settings.EMBEDDING_MODEL
+        self.base_url = base_url or settings.OPENAI_BASE_URL
         
         # Check if API key is a valid key (not empty or default placeholder)
         is_placeholder = (
@@ -31,8 +32,8 @@ class OpenAIProvider(LLMProvider):
                 "timeout": settings.EXTERNAL_REQUEST_TIMEOUT_SECONDS,
                 "max_retries": 0,
             }
-            if settings.OPENAI_BASE_URL:
-                client_kwargs["base_url"] = settings.OPENAI_BASE_URL
+            if self.base_url:
+                client_kwargs["base_url"] = self.base_url
             self.client = openai.AsyncOpenAI(**client_kwargs)
         else:
             self.client = None

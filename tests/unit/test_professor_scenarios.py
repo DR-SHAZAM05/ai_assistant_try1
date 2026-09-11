@@ -1,6 +1,7 @@
 import uuid
 import pytest
 from datetime import datetime, timezone, timedelta
+from typing import Optional, List, Dict, Any
 
 from src.app.services.calendar_service import CalendarService
 from src.app.agents.calendar_agent import CalendarAgent

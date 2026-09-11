@@ -112,6 +112,7 @@ class Settings(BaseSettings):
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/callback"
     GOOGLE_TOKEN_FILE: str = "secrets/google-calendar-token.json"
     GOOGLE_SERVICE_ACCOUNT_FILE: Optional[str] = None
+    GOOGLE_SERVICE_ACCOUNT_EMAIL: Optional[str] = None
     GOOGLE_CALENDAR_ID: str = "primary"
     GOOGLE_CALENDAR_SCOPES: str = "https://www.googleapis.com/auth/calendar"
     GOOGLE_CALENDAR_TIMEZONE: str = "Europe/Bucharest"
@@ -206,6 +207,22 @@ class Settings(BaseSettings):
     @property
     def cors_allowed_origins(self) -> list[str]:
         return [origin.strip().rstrip("/") for origin in self.CORS_ALLOWED_ORIGINS.split(",") if origin.strip()]
+
+    @property
+    def google_service_account_email(self) -> Optional[str]:
+        if self.GOOGLE_SERVICE_ACCOUNT_EMAIL:
+            return self.GOOGLE_SERVICE_ACCOUNT_EMAIL
+        if self.GOOGLE_SERVICE_ACCOUNT_FILE:
+            try:
+                import json
+                from pathlib import Path
+                p = Path(self.GOOGLE_SERVICE_ACCOUNT_FILE)
+                if p.exists():
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                    return data.get("client_email")
+            except Exception:
+                pass
+        return None
 
     def production_validation_errors(self) -> list[str]:
         if not self.is_production:

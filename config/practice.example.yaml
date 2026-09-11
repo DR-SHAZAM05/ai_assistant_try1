@@ -1,6 +1,24 @@
 # Practice Knowledge Base & Integration Configuration
 practice:
   current_academic_year: "2026-2027"
+  practice_period: "15 Iulie 2026 – 28 August 2026"
+
+  deadlines:
+    - id: "conventie"
+      title: "Depunere Convenție-Cadru"
+      date: "2026-08-28T16:00:00"
+      display_date: "28 August 2026"
+      description: "Depunere Convenție-cadru semnată în 3 exemplare originale."
+    - id: "caiet"
+      title: "Depunere Caiet Practică & Fișă Evaluare (90h)"
+      date: "2026-09-02T16:00:00"
+      display_date: "2 Septembrie 2026"
+      description: "Predare Caiet de practică completat (90 ore normate) și evaluat."
+    - id: "colocviu"
+      title: "Colocviu de Practică FIESC"
+      date: "2026-09-05T09:00:00"
+      display_date: "7-9 Septembrie 2026"
+      description: "Susținere Colocviu de practică FIESC (4 credite ECTS)."
 
   categories:
     - conventie

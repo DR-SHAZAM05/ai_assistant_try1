@@ -38,6 +38,30 @@ def load_practice_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     # Hardcoded safety fallback
     fallback = {
         "current_academic_year": settings.CURRENT_ACADEMIC_YEAR,
+        "practice_period": "15 Iulie 2026 – 28 August 2026",
+        "deadlines": [
+            {
+                "id": "conventie",
+                "title": "Depunere Convenție-Cadru",
+                "date": "2026-08-28T16:00:00",
+                "display_date": "28 August 2026",
+                "description": "Depunere Convenție-cadru semnată în 3 exemplare originale.",
+            },
+            {
+                "id": "caiet",
+                "title": "Depunere Caiet Practică & Fișă Evaluare (90h)",
+                "date": "2026-09-02T16:00:00",
+                "display_date": "2 Septembrie 2026",
+                "description": "Predare Caiet de practică completat (90 ore normate) și evaluat.",
+            },
+            {
+                "id": "colocviu",
+                "title": "Colocviu de Practică FIESC",
+                "date": "2026-09-05T09:00:00",
+                "display_date": "7-9 Septembrie 2026",
+                "description": "Susținere Colocviu de practică FIESC (4 credite ECTS).",
+            },
+        ],
         "keywords": [
             "practica", "practică", "conventie", "convenție",
             "caiet", "adeverinta", "adeverință", "ore", "tutore",
@@ -66,3 +90,18 @@ def get_practice_keywords() -> List[str]:
 def get_practice_categories() -> List[str]:
     cfg = load_practice_config()
     return cfg.get("categories", ["conventie", "adeverinta", "caiet_practica", "colocviu"])
+
+
+def get_practice_deadlines() -> List[Dict[str, Any]]:
+    cfg = load_practice_config()
+    return cfg.get("deadlines", [])
+
+
+def get_practice_period() -> str:
+    cfg = load_practice_config()
+    return cfg.get("practice_period", "15 Iulie 2026 – 28 August 2026")
+
+
+def get_current_academic_year() -> str:
+    cfg = load_practice_config()
+    return cfg.get("current_academic_year", settings.CURRENT_ACADEMIC_YEAR)

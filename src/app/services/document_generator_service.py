@@ -18,6 +18,7 @@ from docx.shared import Cm, Inches, Pt, RGBColor
 
 from src.app.core.config import settings
 from src.app.core.logging import logger
+from src.app.core.practice_config import get_practice_period
 
 
 class DocumentGeneratorService:
@@ -233,7 +234,7 @@ class DocumentGeneratorService:
         tutor_name = data.get("tutor_name", "[Nume și Prenume Tutore Practică]")
         tutor_role = data.get("tutor_role", "Senior Software Engineer / Mentor")
         supervisor_name = data.get("supervisor_name", "Șef Lucr. Dr. Ing. Dragoș Bratu")
-        practice_period = data.get("practice_period", "15 Iulie 2026 – 28 August 2026")
+        practice_period = data.get("practice_period", get_practice_period())
         project_topic = data.get("project_topic", "Dezvoltarea unei Platforme Asistive AI pentru Management Academic și Practică")
 
         doc = docx.Document()

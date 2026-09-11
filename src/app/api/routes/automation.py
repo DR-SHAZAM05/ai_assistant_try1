@@ -96,18 +96,26 @@ async def check_practice_deadlines(
     from src.app.services.action_item_service import ActionItemService
     from datetime import datetime
 
+    from src.app.core.practice_config import get_practice_deadlines
+
     action_service = ActionItemService()
     items = await action_service.list_action_items(status="open")
 
     now = datetime.now()
-    milestones = [
-        ("📄 Depunere Convenție-Cadru", datetime(2026, 8, 28, 16, 0)),
-        ("📘 Depunere Caiet Practică & Fișă Evaluare (90h)", datetime(2026, 9, 2, 16, 0)),
-        ("🎓 Colocviu de Practică FIESC", datetime(2026, 9, 5, 9, 0)),
-    ]
-
+    deadlines_cfg = get_practice_deadlines()
     milestone_lines = []
-    for title, dt in milestones:
+    for item in deadlines_cfg:
+        title = item.get("title", "Termen")
+        raw_dt = item.get("date")
+        if isinstance(raw_dt, str):
+            try:
+                dt = datetime.fromisoformat(raw_dt)
+            except Exception:
+                dt = now
+        elif isinstance(raw_dt, datetime):
+            dt = raw_dt
+        else:
+            dt = now
         diff_days = (dt.date() - now.date()).days
         if diff_days > 0:
             proximity = f"(în {diff_days} zile)"
@@ -224,9 +232,11 @@ async def daily_morning_briefing(
         logger.debug("Briefing email check error: %s", e)
 
     # 3. UNITBV / Practică Status (Section 17: UNITBV / PRACTICĂ)
+    from src.app.core.practice_config import get_practice_deadlines
+    deadlines_cfg = get_practice_deadlines()
     briefing_lines.append("🎓 **UNITBV / Practică Studențească**:")
-    briefing_lines.append("• Termen limită Convenție: **28 August 2026** (3 exemplare originale)")
-    briefing_lines.append("• Termen predare Caiet practică: **2 Septembrie 2026** (90 ore normate)")
+    for dl in deadlines_cfg[:2]:
+        briefing_lines.append(f"• Termen {dl.get('id', 'termen').capitalize()}: **{dl.get('display_date', '')}** ({dl.get('description', '')})")
     briefing_lines.append("")
 
     # 4. Open Tasks & Action Items (Section 17: ACTION ITEMS)

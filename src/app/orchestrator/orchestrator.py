@@ -21,6 +21,7 @@ from src.app.integrations.telegram.service import (
 )
 from src.app.core.config import settings
 from src.app.core.logging import logger
+from src.app.core.practice_config import get_practice_deadlines, get_current_academic_year
 
 # Active pending drafts map by user_id
 _user_pending_draft_map: Dict[str, str] = {}
@@ -497,12 +498,17 @@ class AIOrchestrator:
                 wants_logbook = True
 
             doc_items: List[Dict[str, Any]] = []
+            deadlines_by_id = {d.get("id"): d for d in get_practice_deadlines()}
+            conv_deadline = deadlines_by_id.get("conventie", {}).get("display_date", "28 August 2026")
+            logbook_deadline = deadlines_by_id.get("caiet", {}).get("display_date", "2 Septembrie 2026")
+            current_year = get_current_academic_year()
+
             if wants_convention:
                 conv_bytes = self.document_generator_service.generate_convention_docx()
                 doc_items.append({
                     "filename": "Conventie_Cadru_Practica_UNITBV.docx",
                     "bytes": conv_bytes,
-                    "caption": "📄 **Convenție-Cadru de Practică UNITBV** (Anul Universitar 2026-2027)"
+                    "caption": f"📄 **Convenție-Cadru de Practică UNITBV** (Anul Universitar {current_year})"
                 })
             if wants_logbook:
                 log_bytes = self.document_generator_service.generate_logbook_docx()
@@ -518,12 +524,12 @@ class AIOrchestrator:
             if wants_convention:
                 resp_lines.append("• 📄 **Convenție-cadru de practică** (format Word .docx)")
                 resp_lines.append("  - Se semnează în 3 exemplare originale (Student, Partener practică, Secretariat FIESC).")
-                resp_lines.append("  - Termen limită depunere: **28 August 2026**.\n")
+                resp_lines.append(f"  - Termen limită depunere: **{conv_deadline}**.\n")
             if wants_logbook:
                 resp_lines.append("• 📘 **Caiet de practică / Jurnal de activitate** (format Word .docx)")
                 resp_lines.append("  - Structurat pe 3 săptămâni (90 de ore normate, 4 credite ECTS).")
                 resp_lines.append("  - Include Fișa de evaluare și nota tutorelui companiei (50% din nota colocviului).")
-                resp_lines.append("  - Termen limită încărcare dosar: **2 Septembrie 2026**.\n")
+                resp_lines.append(f"  - Termen limită încărcare dosar: **{logbook_deadline}**.\n")
 
             resp_lines.append("📎 Ți-am atașat documentele editabile direct în conversație pentru descărcare și completare.")
             response_dict = {
@@ -799,10 +805,12 @@ class AIOrchestrator:
                 logger.debug(f"Aggregated overview emails error: {e}")
 
             # 4. Practice Milestones & Deadlines (UNITBV FIESC)
-            lines.append("🎓 **Termene Limită Practică UNITBV (Anul 2026-2027)**:")
-            lines.append("• 📄 **28 August 2026**: Depunere Convenție-cadru semnată în 3 exemplare originale.")
-            lines.append("• 📘 **2 Septembrie 2026**: Predare Caiet de practică completat (90 ore normate) și evaluat.")
-            lines.append("• 🎯 **7-9 Septembrie 2026**: Susținere Colocviu de practică FIESC (4 credite ECTS).")
+            current_year = get_current_academic_year()
+            lines.append(f"🎓 **Termene Limită Practică UNITBV (Anul {current_year})**:")
+            icon_map = {"conventie": "📄", "caiet": "📘", "colocviu": "🎯"}
+            for dl in get_practice_deadlines():
+                ic = icon_map.get(dl.get("id"), "📌")
+                lines.append(f"• {ic} **{dl.get('display_date')}**: {dl.get('description')}")
             lines.append("")
             lines.append("💡 *Apasă pe butoanele de mai jos pentru a gestiona direct sarcinile sau a descărca documentele necesare.*")
 
@@ -864,8 +872,8 @@ class AIOrchestrator:
 
             # UNITBV / Practică Status (Section 17: UNITBV / PRACTICĂ)
             briefing_lines.append("🎓 **UNITBV / Practică Studențească**:")
-            briefing_lines.append("• Termen limită Convenție: **28 August 2026** (3 exemplare originale)")
-            briefing_lines.append("• Termen predare Caiet practică: **2 Septembrie 2026** (90 ore normate)")
+            for dl in get_practice_deadlines()[:2]:
+                briefing_lines.append(f"• Termen limită {dl.get('title', '')}: **{dl.get('display_date', '')}**")
             briefing_lines.append("")
 
             # Open Tasks (Section 17: ACTION ITEMS)
@@ -1045,12 +1053,13 @@ class AIOrchestrator:
                     target_year = now.year if now.month < 10 else now.year + 1
                     target_date = datetime(target_year, 10, 1).date()
                     days_left = (target_date - now.date()).days
+                    acad_year = get_current_academic_year()
                     if days_left > 0:
-                        ans = f"🎓 Mai sunt exact **{days_left} de zile** până la deschiderea noului an universitar 2026-2027 (1 octombrie 2026)."
+                        ans = f"🎓 Mai sunt exact **{days_left} de zile** până la deschiderea noului an universitar {acad_year} (1 octombrie {target_year})."
                     elif days_left == 0:
-                        ans = "🎓 Noul an universitar 2026-2027 începe chiar astăzi, 1 octombrie!"
+                        ans = f"🎓 Noul an universitar {acad_year} începe chiar astăzi, 1 octombrie!"
                     else:
-                        ans = "🎓 Noul an universitar 2026-2027 a început deja."
+                        ans = f"🎓 Noul an universitar {acad_year} a început deja."
                     response_dict = {
                         "response": ans,
                         "intent": intent_result.intent.value,

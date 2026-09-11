@@ -1,5 +1,6 @@
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List, Dict, Any
+from src.app.core.config import settings
 
 
 class RAGChunkSchema(BaseModel):
@@ -22,5 +23,5 @@ class RAGQueryResult(BaseModel):
     answer: str
     sources: List[Dict[str, Any]] = []
     confidence_score: float = 0.0
-    academic_year: str = "2026-2027"
+    academic_year: str = Field(default_factory=lambda: settings.CURRENT_ACADEMIC_YEAR)
     chunks_used: int = 0
