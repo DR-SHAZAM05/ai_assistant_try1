@@ -8,6 +8,7 @@ from sqlalchemy import select
 from src.app.core.config import settings
 from src.app.core.exceptions import PersistenceException
 from src.app.core.logging import logger
+from src.app.core.user_scope import require_user_id
 from src.app.database.models.models import PendingEmailDraft
 from src.app.database.session import AsyncSessionLocal
 from src.app.schemas.email import EmailDraftReply
@@ -17,20 +18,20 @@ def _utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-_memory_drafts: Dict[str, EmailDraftReply] = {}
+_memory_drafts: Dict[str, Dict[str, EmailDraftReply]] = {}
 
 
 class PendingEmailDraftStore:
-    """Persist approval state in PostgreSQL in production and memory only in development."""
+    """Persist approval state in PostgreSQL, with a test-only memory fallback."""
 
     def __init__(self, session_factory=AsyncSessionLocal):
         self.session_factory = session_factory
 
     async def save(self, draft: EmailDraftReply, owner_id: Optional[str]) -> EmailDraftReply:
-        draft.owner_id = str(owner_id or "local")
+        draft.owner_id = require_user_id(owner_id)
         draft.expires_at = _utcnow_naive() + timedelta(seconds=settings.DRAFT_APPROVAL_TTL_SECONDS)
-        if settings.mocks_allowed:
-            _memory_drafts[draft.draft_id] = draft
+        if settings.persistence_fallback_allowed:
+            _memory_drafts.setdefault(draft.owner_id, {})[draft.draft_id] = draft
             return draft
 
         try:
@@ -56,9 +57,9 @@ class PendingEmailDraftStore:
             raise PersistenceException("Unable to persist the pending email draft") from exc
 
     async def get(self, draft_id: str, owner_id: Optional[str]) -> Optional[EmailDraftReply]:
-        expected_owner = str(owner_id or "local")
-        if settings.mocks_allowed:
-            draft = _memory_drafts.get(draft_id)
+        expected_owner = require_user_id(owner_id)
+        if settings.persistence_fallback_allowed:
+            draft = _memory_drafts.get(expected_owner, {}).get(draft_id)
             if not draft or draft.owner_id != expected_owner:
                 return None
             if draft.status != "pending_approval" or self._is_expired(draft.expires_at):
@@ -89,15 +90,18 @@ class PendingEmailDraftStore:
             raise PersistenceException("Unable to load the pending email draft") from exc
 
     async def get_for_owner(self, owner_id: Optional[str]) -> Optional[EmailDraftReply]:
-        expected_owner = str(owner_id or "local")
-        if settings.mocks_allowed:
+        expected_owner = require_user_id(owner_id)
+        if settings.persistence_fallback_allowed:
             candidates = [
-                draft for draft in _memory_drafts.values()
-                if draft.owner_id == expected_owner
-                and draft.status == "pending_approval"
+                draft for draft in _memory_drafts.get(expected_owner, {}).values()
+                if draft.status == "pending_approval"
                 and not self._is_expired(draft.expires_at)
             ]
-            return max(candidates, key=lambda draft: draft.expires_at) if candidates else None
+            return (
+                max(candidates, key=lambda draft: draft.expires_at or datetime.min)
+                if candidates
+                else None
+            )
 
         try:
             async with self.session_factory() as session:
@@ -122,9 +126,9 @@ class PendingEmailDraftStore:
         status: str,
         expected_statuses: tuple[str, ...] = ("pending_approval",),
     ) -> Optional[EmailDraftReply]:
-        expected_owner = str(owner_id or "local")
-        if settings.mocks_allowed:
-            draft = _memory_drafts.get(draft_id)
+        expected_owner = require_user_id(owner_id)
+        if settings.persistence_fallback_allowed:
+            draft = _memory_drafts.get(expected_owner, {}).get(draft_id)
             if (
                 not draft
                 or draft.owner_id != expected_owner
@@ -134,7 +138,7 @@ class PendingEmailDraftStore:
                 return None
             draft.status = status
             if status in {"rejected", "sent", "failed", "expired"}:
-                _memory_drafts.pop(draft_id, None)
+                _memory_drafts.get(expected_owner, {}).pop(draft_id, None)
             return draft
 
         try:

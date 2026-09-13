@@ -20,11 +20,43 @@ def _require_automation_key(x_automation_key: Optional[str]) -> None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid automation credential.")
 
 
+def _resolve_automation_user(telegram_user_id: Optional[str]) -> str:
+    """Resolve the sole configured user or require an explicit safe target.
+
+    Credentials for mail and calendar are process-wide configuration, so an
+    automation must never broadcast their data to every allowed Telegram id.
+    """
+
+    allowed_ids = settings.telegram_allowed_user_ids
+    requested_id = str(telegram_user_id or "").strip()
+    if requested_id:
+        if allowed_ids and requested_id not in allowed_ids and settings.APP_ENV != "test":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Telegram user is not allowed.")
+        return requested_id
+    if len(allowed_ids) == 1:
+        return next(iter(allowed_ids))
+    if not allowed_ids:
+        if settings.APP_ENV == "test":
+            return "test_automation_user"
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Configure TELEGRAM_ALLOWED_USER_IDS before running user-scoped automation.",
+        )
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail="telegram_user_id is required when more than one Telegram user is allowed.",
+    )
+
+
 @router.post("/news/refresh")
-async def refresh_news(x_automation_key: Optional[str] = Header(None)):
+async def refresh_news(
+    x_automation_key: Optional[str] = Header(None),
+    telegram_user_id: Optional[str] = None,
+):
     """Fetch, parse, and rank the configured RSS feeds for a scheduled n8n run."""
     _require_automation_key(x_automation_key)
-    articles = await NewsService().fetch_and_process_news()
+    owner_id = _resolve_automation_user(telegram_user_id)
+    articles = await NewsService().fetch_and_process_news(user_id=owner_id)
     logger.info("n8n news refresh completed with %s relevant articles.", len(articles))
     return {"status": "success", "relevant_articles": len(articles)}
 
@@ -33,9 +65,11 @@ async def refresh_news(x_automation_key: Optional[str] = Header(None)):
 async def poll_mailboxes(
     x_automation_key: Optional[str] = Header(None),
     notify_telegram: bool = False,
+    telegram_user_id: Optional[str] = None,
 ):
     """Verify and poll configured inboxes. Optionally push Telegram alerts for urgent/practice emails."""
     _require_automation_key(x_automation_key)
+    owner_id = _resolve_automation_user(telegram_user_id)
     service = EmailService()
     accounts = ("personal", "unitbv")
     results = {}
@@ -43,7 +77,7 @@ async def poll_mailboxes(
 
     for account in accounts:
         try:
-            emails = await service.list_emails(account)
+            emails = await service.list_emails(account, user_id=owner_id)
             results[account] = {"status": "success", "messages": len(emails)}
             for em in emails:
                 if em.importance in ["high", "important"] or em.is_practice_related or em.requires_action:
@@ -53,7 +87,7 @@ async def poll_mailboxes(
             results[account] = {"status": "error"}
 
     notifications_sent = 0
-    if notify_telegram and urgent_alerts and settings.telegram_allowed_user_ids:
+    if notify_telegram and urgent_alerts:
         from src.app.integrations.telegram.service import TelegramService
         telegram_service = TelegramService()
         for account, em in urgent_alerts[:2]:
@@ -69,12 +103,11 @@ async def poll_mailboxes(
                     [{"text": f"✍️ Răspunde ({em.sender.split('@')[0]})", "callback_data": f"draft_reply:{em.message_id}"}]
                 ]
             }
-            for uid in settings.telegram_allowed_user_ids:
-                try:
-                    if await telegram_service.send_message(chat_id=int(uid), text=alert_msg, reply_markup=inline_kb):
-                        notifications_sent += 1
-                except Exception as e:
-                    logger.warning("Failed to send email alert to %s: %s", uid, e)
+            try:
+                if await telegram_service.send_message(chat_id=int(owner_id), text=alert_msg, reply_markup=inline_kb):
+                    notifications_sent += 1
+            except Exception as e:
+                logger.warning("Failed to send email alert to %s: %s", owner_id, e)
 
     overall_status = "success" if all(item["status"] == "success" for item in results.values()) else "partial"
     return {
@@ -89,9 +122,11 @@ async def poll_mailboxes(
 async def check_practice_deadlines(
     x_automation_key: Optional[str] = Header(None),
     notify_telegram: bool = True,
+    telegram_user_id: Optional[str] = None,
 ):
     """Check pending action items and official UNITBV practice milestones with proactive Telegram alerts."""
     _require_automation_key(x_automation_key)
+    owner_id = _resolve_automation_user(telegram_user_id)
     from src.app.integrations.telegram.service import TelegramService
     from src.app.services.action_item_service import ActionItemService
     from datetime import datetime
@@ -99,7 +134,7 @@ async def check_practice_deadlines(
     from src.app.core.practice_config import get_practice_deadlines
 
     action_service = ActionItemService()
-    items = await action_service.list_action_items(status="open")
+    items = await action_service.list_action_items(status="open", user_id=owner_id)
 
     now = datetime.now()
     deadlines_cfg = get_practice_deadlines()
@@ -161,14 +196,13 @@ async def check_practice_deadlines(
     }
 
     notifications_sent = 0
-    if notify_telegram and settings.telegram_allowed_user_ids:
+    if notify_telegram:
         telegram_service = TelegramService()
-        for uid in settings.telegram_allowed_user_ids:
-            try:
-                if await telegram_service.send_message(chat_id=int(uid), text=message_text, reply_markup=inline_keyboard):
-                    notifications_sent += 1
-            except Exception as e:
-                logger.warning("Failed to send scheduled deadline reminder to %s: %s", uid, e)
+        try:
+            if await telegram_service.send_message(chat_id=int(owner_id), text=message_text, reply_markup=inline_keyboard):
+                notifications_sent += 1
+        except Exception as e:
+            logger.warning("Failed to send scheduled deadline reminder to %s: %s", owner_id, e)
 
     return {
         "status": "success",
@@ -181,9 +215,11 @@ async def check_practice_deadlines(
 async def daily_morning_briefing(
     x_automation_key: Optional[str] = Header(None),
     notify_telegram: bool = True,
+    telegram_user_id: Optional[str] = None,
 ):
     """Compile and push a morning daily briefing (Calendar + Tasks + Top Tech News)."""
     _require_automation_key(x_automation_key)
+    owner_id = _resolve_automation_user(telegram_user_id)
     from src.app.integrations.telegram.service import TelegramService
     from src.app.agents.calendar_agent import CalendarAgent
     from src.app.services.action_item_service import ActionItemService
@@ -212,7 +248,11 @@ async def daily_morning_briefing(
         all_emails = []
         for acc in ["personal", "unitbv"]:
             try:
-                fetched = await email_svc.list_emails(account_type=acc, filter_params=EmailFilterParams(limit=5))
+                fetched = await email_svc.list_emails(
+                    account_type=acc,
+                    filter_params=EmailFilterParams(limit=5),
+                    user_id=owner_id,
+                )
                 all_emails.extend(fetched)
             except Exception:
                 pass
@@ -242,7 +282,7 @@ async def daily_morning_briefing(
     # 4. Open Tasks & Action Items (Section 17: ACTION ITEMS)
     try:
         action_service = ActionItemService()
-        items = await action_service.list_action_items(status="open")
+        items = await action_service.list_action_items(status="open", user_id=owner_id)
         if items:
             briefing_lines.append(f"📋 **Sarcini prioritare ({len(items)} în așteptare)**:")
             for idx, it in enumerate(items[:3], 1):
@@ -256,7 +296,7 @@ async def daily_morning_briefing(
 
     # 3. Top News
     try:
-        articles = await NewsService().fetch_and_process_news(max_results=2)
+        articles = await NewsService().fetch_and_process_news(max_results=2, user_id=owner_id)
         if articles:
             briefing_lines.append("📰 **Top Știri Tehnologice Relevante**:")
             for n in articles[:2]:
@@ -282,19 +322,17 @@ async def daily_morning_briefing(
     }
 
     notifications_sent = 0
-    if notify_telegram and settings.telegram_allowed_user_ids:
+    if notify_telegram:
         telegram_service = TelegramService()
-        for uid in settings.telegram_allowed_user_ids:
-            try:
-                if await telegram_service.send_message(chat_id=int(uid), text=briefing_text, reply_markup=inline_keyboard):
-                    notifications_sent += 1
-            except Exception as e:
-                logger.warning("Failed to send morning briefing to %s: %s", uid, e)
+        try:
+            if await telegram_service.send_message(chat_id=int(owner_id), text=briefing_text, reply_markup=inline_keyboard):
+                notifications_sent += 1
+        except Exception as e:
+            logger.warning("Failed to send morning briefing to %s: %s", owner_id, e)
 
     return {
         "status": "success",
         "briefing_length": len(briefing_text),
         "notifications_sent": notifications_sent,
     }
-
 

@@ -22,6 +22,7 @@ from src.app.integrations.telegram.service import (
 from src.app.core.config import settings
 from src.app.core.logging import logger
 from src.app.core.practice_config import get_practice_deadlines, get_current_academic_year
+from src.app.core.user_scope import require_user_id
 
 # Active pending drafts map by user_id
 _user_pending_draft_map: Dict[str, str] = {}
@@ -126,7 +127,7 @@ class AIOrchestrator:
         Practice RAG questions take priority when practice domain keywords are detected.
         """
         prompt_clean = user_prompt.strip(" .!?,;:\n").lower()
-        uid = str(user_id or "default")
+        uid = require_user_id(user_id)
 
         # 0. Direct button menu & slash command matches
         button_map = {
@@ -467,7 +468,7 @@ class AIOrchestrator:
         """
         import time
         start_time = time.perf_counter()
-        uid = str(user_id or "default")
+        uid = require_user_id(user_id)
         logger.info("AIOrchestrator processing a Telegram request (length=%s).", len(user_prompt))
         
         intent_result = await self.detect_intent(user_prompt, user_id=uid, history=history)
@@ -542,7 +543,10 @@ class AIOrchestrator:
             }
 
         elif intent_result.intent == IntentType.PRACTICE_HISTORY_QUERY:
-            result = await self.practice_agent.handle_historical_practice_query(user_prompt=user_prompt)
+            result = await self.practice_agent.handle_historical_practice_query(
+                user_prompt=user_prompt,
+                user_id=uid,
+            )
             response_dict = {
                 "response": result["text"],
                 "intent": intent_result.intent.value,
@@ -551,7 +555,11 @@ class AIOrchestrator:
             }
 
         elif intent_result.intent == IntentType.PRACTICE_QUERY:
-            result = await self.practice_agent.handle_practice_query(user_prompt=user_prompt, history=history)
+            result = await self.practice_agent.handle_practice_query(
+                user_prompt=user_prompt,
+                history=history,
+                user_id=uid,
+            )
             response_dict = {
                 "response": result["text"],
                 "intent": intent_result.intent.value,
@@ -584,7 +592,7 @@ class AIOrchestrator:
         # 3. NEWS INTENTS EXECUTION
         # -------------------------------------------------------------
         elif intent_result.intent == IntentType.NEWS_QUERY:
-            result = await self.news_agent.handle_news_query(user_prompt=user_prompt)
+            result = await self.news_agent.handle_news_query(user_prompt=user_prompt, user_id=uid)
             response_dict = {
                 "response": result["text"],
                 "intent": intent_result.intent.value,
@@ -653,7 +661,10 @@ class AIOrchestrator:
                 response_dict["inline_keyboard"] = get_draft_approval_keyboard(result["draft_id"])["inline_keyboard"]
 
         elif intent_result.intent == IntentType.EMAIL_ACTION_ITEMS:
-            result = await self.email_agent.handle_action_items_query(user_prompt=user_prompt)
+            result = await self.email_agent.handle_action_items_query(
+                user_prompt=user_prompt,
+                user_id=uid,
+            )
             response_dict = {
                 "response": result["text"],
                 "intent": intent_result.intent.value,
@@ -665,7 +676,8 @@ class AIOrchestrator:
             is_important = "important" in user_prompt.lower()
             result = await self.email_agent.handle_email_query(
                 user_prompt=user_prompt,
-                is_important_only=is_important
+                is_important_only=is_important,
+                user_id=uid,
             )
             response_dict = {
                 "response": result["text"],
@@ -698,9 +710,13 @@ class AIOrchestrator:
 
             inline_kb = None
             if task_id is not None:
-                success = await self.action_item_service.update_action_item_status(item_id=task_id, new_status="completed")
+                success = await self.action_item_service.update_action_item_status(
+                    item_id=task_id,
+                    new_status="completed",
+                    user_id=uid,
+                )
                 if success:
-                    items = await self.action_item_service.list_action_items(status="open")
+                    items = await self.action_item_service.list_action_items(status="open", user_id=uid)
                     if items:
                         lines = [
                             f"✅ **Sarcina #{task_id} a fost marcată ca finalizată!**\n",
@@ -715,7 +731,7 @@ class AIOrchestrator:
                 else:
                     ans = f"⚠️ Nu am găsit sarcina **#{task_id}** în baza de date."
             else:
-                items = await self.action_item_service.list_action_items(status="open")
+                items = await self.action_item_service.list_action_items(status="open", user_id=uid)
                 if not items:
                     ans = "✅ Nu ai sarcini sau acțiuni deschise în acest moment. Toate activitățile tale sunt la zi!"
                 else:
@@ -763,7 +779,7 @@ class AIOrchestrator:
 
             # 2. Open action items / tasks
             try:
-                open_tasks = await self.action_item_service.list_action_items(status="open")
+                open_tasks = await self.action_item_service.list_action_items(status="open", user_id=uid)
                 lines.append(f"📝 **Sarcini și Acțiuni Active ({len(open_tasks)} restante)**:")
                 if open_tasks:
                     for idx, it in enumerate(open_tasks[:5], 1):
@@ -785,7 +801,8 @@ class AIOrchestrator:
                     try:
                         fetched = await self.email_agent.email_service.list_emails(
                             account_type=acc,
-                            filter_params=EmailFilterParams(account_type=acc, limit=5)
+                            filter_params=EmailFilterParams(account_type=acc, limit=5),
+                            user_id=uid,
                         )
                         for m in fetched:
                             if m.requires_action or m.is_practice_related or m.detected_deadline:
@@ -851,7 +868,11 @@ class AIOrchestrator:
                 all_emails = []
                 for acc in ["personal", "unitbv"]:
                     try:
-                        fetched = await self.email_agent.email_service.list_emails(account_type=acc, filter_params=EmailFilterParams(limit=5))
+                        fetched = await self.email_agent.email_service.list_emails(
+                            account_type=acc,
+                            filter_params=EmailFilterParams(limit=5),
+                            user_id=uid,
+                        )
                         all_emails.extend(fetched)
                     except Exception:
                         pass
@@ -878,7 +899,7 @@ class AIOrchestrator:
 
             # Open Tasks (Section 17: ACTION ITEMS)
             try:
-                items = await self.action_item_service.list_action_items(status="open")
+                items = await self.action_item_service.list_action_items(status="open", user_id=uid)
                 if items:
                     briefing_lines.append(f"📋 **Sarcini prioritare ({len(items)} în așteptare)**:")
                     for idx, it in enumerate(items[:3], 1):
@@ -893,7 +914,7 @@ class AIOrchestrator:
 
             # Tech News
             try:
-                articles = await NewsService().fetch_and_process_news(max_results=2)
+                articles = await NewsService().fetch_and_process_news(max_results=2, user_id=uid)
                 if articles:
                     briefing_lines.append("📰 **Top Știri Tehnologice Relevante**:")
                     for n in articles[:2]:
@@ -924,15 +945,15 @@ class AIOrchestrator:
             prompt_clean = user_prompt.strip().lower()
             # A. Clear / Reset Memory
             if any(w in prompt_clean for w in ["șterge memoria", "sterge memoria", "uită tot", "uita tot", "resetează", "reseteaza", "șterge preferințele", "sterge preferintele"]):
-                existing = await self.user_memory_service.list_memories()
+                existing = await self.user_memory_service.list_memories(user_id=uid)
                 count = 0
                 for it in existing:
-                    if await self.user_memory_service.delete_memory(it["key"]):
+                    if await self.user_memory_service.delete_memory(it["key"], user_id=uid):
                         count += 1
                 ans = f"🧹 **Memoria pe termen lung a fost resetată.** Am șters {count} preferințe și reguli memorate anterior."
             # B. Query / List Memories
             elif any(w in prompt_clean for w in ["ce preferințe", "ce preferinte", "ce reguli", "ce ții minte", "ce tii minte", "ce memorie", "ce ai memorat", "/memorie", "/preferinte", "/reguli"]):
-                memories = await self.user_memory_service.list_memories()
+                memories = await self.user_memory_service.list_memories(user_id=uid)
                 if not memories:
                     ans = (
                         "🧠 **Nu ai preferințe sau reguli salvate în memoria pe termen lung.**\n\n"
@@ -975,7 +996,8 @@ class AIOrchestrator:
                 await self.user_memory_service.set_memory(
                     key=key_candidate,
                     value=cleaned_val,
-                    category="preference"
+                    category="preference",
+                    user_id=uid,
                 )
                 ans = (
                     f"🧠 **Am salvat noua regulă în memoria pe termen lung!**\n\n"
@@ -1089,7 +1111,7 @@ class AIOrchestrator:
             else:
                 memories = []
                 try:
-                    memories = await self.user_memory_service.list_memories()
+                    memories = await self.user_memory_service.list_memories(user_id=uid)
                 except Exception as mem_e:
                     logger.debug("User memories load error: %s", mem_e)
 
@@ -1126,6 +1148,7 @@ class AIOrchestrator:
         duration_ms = (time.perf_counter() - start_time) * 1000.0
         try:
             await self.audit_service.log_event(
+                user_id=uid,
                 user_request=user_prompt,
                 selected_tool=intent_result.intent.value,
                 model_used=response_dict.get("model_used"),

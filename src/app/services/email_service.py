@@ -1,6 +1,8 @@
 import uuid
 import re
+from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
+from sqlalchemy import select, text
 from src.app.integrations.email.factory import get_email_provider
 from src.app.llm.factory import get_llm_provider
 from src.app.services.practice_history_service import PracticeHistoryService
@@ -13,7 +15,14 @@ from src.app.schemas.email import (
 )
 from src.app.core.logging import logger
 from src.app.core.exceptions import HumanApprovalRequiredException, IntegrationException
+from src.app.core.exceptions import PersistenceException
+from src.app.core.user_scope import require_user_id
+from src.app.database.models.models import Email
+from src.app.database.session import AsyncSessionLocal, engine
 from src.app.services.pending_email_draft_store import PendingEmailDraftStore
+
+
+_memory_emails: Dict[str, Dict[tuple[str, str], EmailMessageSchema]] = {}
 
 
 class EmailService:
@@ -29,28 +38,127 @@ class EmailService:
         practice_history_service: Optional[PracticeHistoryService] = None,
         pending_draft_store: Optional[PendingEmailDraftStore] = None,
         user_memory_service: Optional[UserMemoryService] = None,
+        session_factory=AsyncSessionLocal,
+        database_engine=engine,
     ):
         self.llm = llm_provider or get_llm_provider()
         self.practice_agent = practice_agent
         self.practice_history_service = practice_history_service or PracticeHistoryService()
         self.pending_draft_store = pending_draft_store or PendingEmailDraftStore()
         self.user_memory_service = user_memory_service or UserMemoryService()
+        self.session_factory = session_factory
+        self.database_engine = database_engine
+        self._schema_ready = False
+        self._db_available = True
 
     async def list_emails(
         self,
         account_type: str = "personal",
-        filter_params: Optional[EmailFilterParams] = None
+        filter_params: Optional[EmailFilterParams] = None,
+        user_id: Optional[str] = None,
     ) -> List[EmailMessageSchema]:
+        owner_id = require_user_id(user_id)
         provider = get_email_provider(account_type)
         emails = await provider.fetch_emails(account_type, filter_params)
-        return await self._apply_user_memory_rules(emails)
+        emails = await self._apply_user_memory_rules(emails, user_id=owner_id)
+        await self.persist_emails(emails, user_id=owner_id)
+        return emails
 
-    async def _apply_user_memory_rules(self, emails: List[EmailMessageSchema]) -> List[EmailMessageSchema]:
+    async def persist_emails(
+        self,
+        emails: List[EmailMessageSchema],
+        user_id: Optional[str] = None,
+    ) -> List[EmailMessageSchema]:
+        """Upsert mailbox messages for one Telegram user in PostgreSQL."""
+
+        owner_id = require_user_id(user_id)
+        if not await self._can_use_database():
+            self._persist_to_memory(owner_id, emails)
+            return emails
+
+        try:
+            async with self.session_factory() as session:
+                for email_obj in emails:
+                    existing = await session.scalar(
+                        select(Email).where(
+                            Email.user_id == owner_id,
+                            Email.account_type == email_obj.account_type,
+                            Email.message_id == email_obj.message_id,
+                        )
+                    )
+                    values = self._email_values(email_obj)
+                    if existing:
+                        for field_name, value in values.items():
+                            setattr(existing, field_name, value)
+                    else:
+                        session.add(
+                            Email(
+                                user_id=owner_id,
+                                message_id=email_obj.message_id,
+                                account_type=email_obj.account_type,
+                                **values,
+                            )
+                        )
+                await session.commit()
+            return emails
+        except Exception as exc:
+            self._disable_database(exc)
+            self._persist_to_memory(owner_id, emails)
+            return emails
+
+    async def list_persisted_emails(
+        self,
+        user_id: Optional[str] = None,
+        account_type: Optional[str] = None,
+        is_important_only: bool = False,
+        limit: int = 10,
+    ) -> List[EmailMessageSchema]:
+        """Read previously persisted mailbox messages without contacting IMAP."""
+
+        owner_id = require_user_id(user_id)
+        if await self._can_use_database():
+            try:
+                async with self.session_factory() as session:
+                    stmt = select(Email).where(Email.user_id == owner_id)
+                    if account_type:
+                        stmt = stmt.where(Email.account_type == account_type)
+                    if is_important_only:
+                        stmt = stmt.where(
+                            (Email.importance.in_(("high", "important")))
+                            | (Email.is_practice_related.is_(True))
+                        )
+                    stmt = stmt.order_by(Email.received_at.desc()).limit(limit)
+                    result = await session.execute(stmt)
+                    return [self._email_to_schema(row) for row in result.scalars().all()]
+            except Exception as exc:
+                self._disable_database(exc)
+
+        stored = list(_memory_emails.get(owner_id, {}).values())
+        if account_type:
+            stored = [email for email in stored if email.account_type == account_type]
+        if is_important_only:
+            stored = [
+                email for email in stored
+                if email.importance in {"high", "important"} or email.is_practice_related
+            ]
+        stored.sort(key=lambda email: email.received_at, reverse=True)
+        return [email.model_copy(deep=True) for email in stored[:limit]]
+
+    async def _apply_user_memory_rules(
+        self,
+        emails: List[EmailMessageSchema],
+        user_id: Optional[str] = None,
+    ) -> List[EmailMessageSchema]:
         """
         Applies long-term memory rules (Section 19: 'Mailurile de la X sunt întotdeauna importante').
         """
         try:
-            memories = await self.user_memory_service.list_memories()
+            import inspect
+            sig = inspect.signature(self.user_memory_service.list_memories)
+            if "user_id" in sig.parameters or any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
+                memories = await self.user_memory_service.list_memories(user_id=user_id)
+            else:
+                memories = await self.user_memory_service.list_memories()
         except Exception:
             return emails
 
@@ -82,8 +190,10 @@ class EmailService:
         sender: Optional[str] = None,
         subject: Optional[str] = None,
         days_back: Optional[int] = None,
-        is_important_only: bool = False
+        is_important_only: bool = False,
+        user_id: Optional[str] = None,
     ) -> List[EmailMessageSchema]:
+        owner_id = require_user_id(user_id)
         keywords = [query] if query else None
         filter_params = EmailFilterParams(
             account_type=account_type,
@@ -94,7 +204,10 @@ class EmailService:
             is_important_only=is_important_only
         )
         provider = get_email_provider(account_type)
-        return await provider.fetch_emails(account_type, filter_params)
+        emails = await provider.fetch_emails(account_type, filter_params)
+        emails = await self._apply_user_memory_rules(emails, user_id=owner_id)
+        await self.persist_emails(emails, user_id=owner_id)
+        return emails
 
     async def classify_email(self, email_obj: EmailMessageSchema) -> EmailClassificationResult:
         """
@@ -162,6 +275,7 @@ class EmailService:
         """
         Generates a draft reply for a specific email and registers it as pending approval.
         """
+        owner_id = require_user_id(owner_id)
         provider = get_email_provider(account_type)
         original_email = await provider.get_email_by_id(account_type, message_id)
 
@@ -173,7 +287,7 @@ class EmailService:
             if original_email:
                 account_type = alt_account
 
-        if not original_email and settings.mocks_allowed:
+        if not original_email and settings.persistence_fallback_allowed:
             # Development fixtures permit a deterministic convenience fallback only.
             fallback_emails = await provider.fetch_emails(account_type, EmailFilterParams(limit=1))
             if fallback_emails:
@@ -185,7 +299,11 @@ class EmailService:
 
         draft_metadata: Dict[str, Any] = {}
         if self._is_practice_email(original_email, user_instructions):
-            practice_context = await self._build_practice_reply_context(original_email, user_instructions)
+            practice_context = await self._build_practice_reply_context(
+                original_email,
+                user_instructions,
+                user_id=owner_id,
+            )
             draft_metadata = practice_context["metadata"]
             prompt = (
                 f"Generează un răspuns profesional de e-mail în limba română la mesajul UNITBV despre practică.\n"
@@ -232,10 +350,10 @@ class EmailService:
     async def get_pending_draft(
         self, draft_id: str, owner_id: Optional[str] = None
     ) -> Optional[EmailDraftReply]:
-        return await self.pending_draft_store.get(draft_id, owner_id)
+        return await self.pending_draft_store.get(draft_id, require_user_id(owner_id))
 
     async def get_pending_draft_for_owner(self, owner_id: Optional[str]) -> Optional[EmailDraftReply]:
-        return await self.pending_draft_store.get_for_owner(owner_id)
+        return await self.pending_draft_store.get_for_owner(require_user_id(owner_id))
 
     async def has_pending_draft(self, owner_id: Optional[str]) -> bool:
         return await self.get_pending_draft_for_owner(owner_id) is not None
@@ -249,6 +367,7 @@ class EmailService:
         """
         Human-in-the-Loop approval check. Only sends email if user explicitly approves.
         """
+        owner_id = require_user_id(owner_id)
         draft = await self.pending_draft_store.get(draft_id, owner_id)
         if not draft:
             return {
@@ -319,7 +438,8 @@ class EmailService:
     async def _build_practice_reply_context(
         self,
         original_email: EmailMessageSchema,
-        user_instructions: Optional[str] = None
+        user_instructions: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         practice_agent = await self._get_practice_agent()
         query = f"{original_email.subject}\n{original_email.body_text}\n{user_instructions or ''}".strip()
@@ -327,12 +447,24 @@ class EmailService:
         topic = self._detect_practice_topic(query)
         question_summary = self._build_question_summary(original_email)
 
-        rag_result = await practice_agent.handle_practice_query(query, academic_year=academic_year)
+        import inspect
+        sig = inspect.signature(practice_agent.handle_practice_query)
+        rag_kwargs = {"academic_year": academic_year}
+        if "user_id" in sig.parameters or any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
+            rag_kwargs["user_id"] = user_id
+        if "persist_history" in sig.parameters or any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
+            rag_kwargs["persist_history"] = False
+
+        rag_result = await practice_agent.handle_practice_query(
+            query,
+            **rag_kwargs,
+        )
         answer_summary = self._summarize_practice_answer(rag_result)
         historical = await self.practice_history_service.find_similar(
             query=question_summary,
             academic_year=academic_year,
             limit=2,
+            user_id=user_id,
         )
         historical_context = "\n".join(
             f"- {item.question_summary} -> {item.answer_summary}"
@@ -452,6 +584,7 @@ class EmailService:
             return
 
         await self.practice_history_service.save_exchange(
+            user_id=draft.owner_id,
             academic_year=metadata.get("academic_year", "unknown"),
             topic=metadata.get("topic", "practica"),
             question_summary=metadata.get("question_summary", draft.subject),
@@ -463,3 +596,97 @@ class EmailService:
             decision=metadata.get("decision"),
             tags=metadata.get("tags", []),
         )
+
+    @staticmethod
+    def _naive_datetime(value: Optional[datetime]) -> Optional[datetime]:
+        if value is None:
+            return None
+        if value.tzinfo is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+
+    @classmethod
+    def _parse_deadline(cls, value: Optional[str]) -> Optional[datetime]:
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            return cls._naive_datetime(value)
+        try:
+            return cls._naive_datetime(datetime.fromisoformat(value.replace("Z", "+00:00")))
+        except (TypeError, ValueError):
+            logger.debug("Skipping non-ISO email deadline during persistence.")
+            return None
+
+    @staticmethod
+    def _serialise_actions(actions: List[EmailActionItem]) -> List[Dict[str, Any]]:
+        return [
+            action.model_dump() if hasattr(action, "model_dump") else dict(action)
+            for action in actions
+        ]
+
+    @classmethod
+    def _email_values(cls, email_obj: EmailMessageSchema) -> Dict[str, Any]:
+        return {
+            "sender": email_obj.sender,
+            "recipients": list(email_obj.recipients),
+            "subject": email_obj.subject,
+            "body_text": email_obj.body_text,
+            "received_at": cls._naive_datetime(email_obj.received_at),
+            "summary": email_obj.summary,
+            "category": email_obj.category,
+            "importance": email_obj.importance,
+            "is_practice_related": email_obj.is_practice_related,
+            "requires_action": email_obj.requires_action,
+            "detected_deadline": cls._parse_deadline(email_obj.detected_deadline),
+            "actions": cls._serialise_actions(email_obj.actions),
+        }
+
+    @staticmethod
+    def _email_to_schema(email: Email) -> EmailMessageSchema:
+        deadline = email.detected_deadline.isoformat() if email.detected_deadline else None
+        return EmailMessageSchema(
+            id=email.id,
+            message_id=email.message_id,
+            account_type=email.account_type,
+            sender=email.sender,
+            recipients=email.recipients or [],
+            subject=email.subject or "",
+            body_text=email.body_text or "",
+            received_at=email.received_at,
+            summary=email.summary,
+            category=email.category,
+            importance=email.importance or "medium",
+            is_practice_related=bool(email.is_practice_related),
+            requires_action=bool(email.requires_action),
+            detected_deadline=deadline,
+            actions=email.actions or [],
+        )
+
+    @staticmethod
+    def _persist_to_memory(owner_id: str, emails: List[EmailMessageSchema]) -> None:
+        store = _memory_emails.setdefault(owner_id, {})
+        for email_obj in emails:
+            store[(email_obj.account_type, email_obj.message_id)] = email_obj.model_copy(deep=True)
+
+    async def _can_use_database(self) -> bool:
+        if not self._db_available:
+            if not settings.persistence_fallback_allowed:
+                raise PersistenceException("Email persistence database is unavailable")
+            return False
+        if self._schema_ready:
+            return True
+        try:
+            async with self.database_engine.connect() as connection:
+                await connection.execute(text("SELECT 1"))
+            self._schema_ready = True
+            return True
+        except Exception as exc:
+            self._disable_database(exc)
+            return False
+
+    def _disable_database(self, exc: Exception) -> None:
+        if self._db_available:
+            logger.warning("Email persistence database unavailable; using memory fallback (%s).", type(exc).__name__)
+        self._db_available = False
+        if not settings.persistence_fallback_allowed:
+            raise PersistenceException(f"Email persistence database is unavailable: {exc}") from exc

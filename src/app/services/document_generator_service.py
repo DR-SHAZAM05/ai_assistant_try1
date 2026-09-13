@@ -10,6 +10,7 @@ import io
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import docx
+from docx.document import Document as DocxDocument
 from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement, parse_xml
@@ -131,7 +132,7 @@ class DocumentGeneratorService:
         trPr = row._tr.get_or_add_trPr()
         trPr.append(parse_xml(f'<w:cantSplit {nsdecls("w")}/>'))
 
-    def _configure_document_page(self, doc: docx.Document, doc_title: str):
+    def _configure_document_page(self, doc: DocxDocument, doc_title: str):
         """Setup A4 page margins (2.0 cm) and dynamic running headers and footers."""
         for section in doc.sections:
             section.page_width = Cm(21.0)
@@ -159,7 +160,7 @@ class DocumentGeneratorService:
             r_ftr_l = p_ftr.add_run("Universitatea Transilvania din Brașov • Document Oficial de Practică")
             self._apply_font(r_ftr_l, size_pt=8.0, color_rgb=self.COLOR_MUTED)
 
-    def _add_institutional_header(self, doc: docx.Document):
+    def _add_institutional_header(self, doc: DocxDocument):
         """Adds UNITBV and IESC branding with optional logos."""
         tbl = doc.add_table(rows=1, cols=3)
         tbl.alignment = WD_TABLE_ALIGNMENT.CENTER

@@ -10,14 +10,20 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import httpx
 import yaml
+from sqlalchemy import select, text
 
 from src.app.core.config import settings
+from src.app.core.exceptions import PersistenceException
 from src.app.core.logging import logger
 from src.app.core.retry import retry_async
+from src.app.core.user_scope import require_user_id
+from src.app.database.models.models import NewsArticle
+from src.app.database.session import AsyncSessionLocal, engine
 from src.app.schemas.news import NewsArticleSchema
 
 
 RawArticleFetcher = Callable[[Dict[str, Any]], Awaitable[List[Dict[str, Any]]]]
+_memory_news_articles: Dict[str, Dict[str, NewsArticleSchema]] = {}
 
 
 class NewsService:
@@ -28,11 +34,17 @@ class NewsService:
         config_path: Optional[str] = None,
         llm_provider=None,
         raw_article_fetcher: Optional[RawArticleFetcher] = None,
+        session_factory=AsyncSessionLocal,
+        database_engine=engine,
     ):
         self.config_path = config_path or settings.NEWS_CONFIG_FILE
         self.llm = llm_provider
         self.raw_article_fetcher = raw_article_fetcher or self._fetch_rss_source
         self.config = self._load_config()
+        self.session_factory = session_factory
+        self.database_engine = database_engine
+        self._schema_ready = False
+        self._db_available = True
 
     def _load_config(self) -> Dict[str, Any]:
         path = Path(self.config_path)
@@ -84,7 +96,9 @@ class NewsService:
         self,
         topic_filter: Optional[str] = None,
         max_results: Optional[int] = None,
+        user_id: Optional[str] = None,
     ) -> List[NewsArticleSchema]:
+        owner_id = require_user_id(user_id)
         if not self.config.get("enabled", True):
             return []
 
@@ -126,9 +140,84 @@ class NewsService:
         results = self.deduplicate_articles(parsed_articles)
         results.sort(key=lambda article: article.relevance_score, reverse=True)
         limit = max_results or int(self.config.get("max_results", settings.NEWS_MAX_RESULTS))
-        for article in results[:limit]:
-            article.summary = self._extractive_summary(article.content, article.topic)
-        return results[:limit]
+        selected_articles = results[:limit]
+        for article in selected_articles:
+            article.summary = self._extractive_summary(article.content or "", article.topic)
+        await self.persist_articles(selected_articles, user_id=owner_id)
+        return selected_articles
+
+    async def persist_articles(
+        self,
+        articles: List[NewsArticleSchema],
+        user_id: Optional[str] = None,
+    ) -> List[NewsArticleSchema]:
+        """Upsert RSS results for one Telegram user without sharing feed history."""
+
+        owner_id = require_user_id(user_id)
+        if not await self._can_use_database():
+            store = _memory_news_articles.setdefault(owner_id, {})
+            for article in articles:
+                store[article.url] = article.model_copy(deep=True)
+            return articles
+
+        try:
+            async with self.session_factory() as session:
+                for article in articles:
+                    existing = await session.scalar(
+                        select(NewsArticle).where(
+                            NewsArticle.user_id == owner_id,
+                            NewsArticle.url == article.url,
+                        )
+                    )
+                    values = {
+                        "title": article.title,
+                        "source_name": article.source_name,
+                        "fingerprint": article.fingerprint,
+                        "topic": article.topic,
+                        "relevance_score": article.relevance_score,
+                        "content": article.content,
+                        "summary": article.summary,
+                        "published_at": self._naive_datetime(article.published_at),
+                    }
+                    if existing:
+                        for field_name, value in values.items():
+                            setattr(existing, field_name, value)
+                    else:
+                        session.add(NewsArticle(user_id=owner_id, url=article.url, **values))
+                await session.commit()
+            return articles
+        except Exception as exc:
+            self._disable_database(exc)
+            store = _memory_news_articles.setdefault(owner_id, {})
+            for article in articles:
+                store[article.url] = article.model_copy(deep=True)
+            return articles
+
+    async def list_persisted_articles(
+        self,
+        user_id: Optional[str] = None,
+        topic_filter: Optional[str] = None,
+        limit: int = 10,
+    ) -> List[NewsArticleSchema]:
+        """Read previously persisted news for the current Telegram user only."""
+
+        owner_id = require_user_id(user_id)
+        if await self._can_use_database():
+            try:
+                async with self.session_factory() as session:
+                    stmt = select(NewsArticle).where(NewsArticle.user_id == owner_id)
+                    if topic_filter:
+                        stmt = stmt.where(NewsArticle.topic == topic_filter)
+                    stmt = stmt.order_by(NewsArticle.published_at.desc()).limit(limit)
+                    result = await session.execute(stmt)
+                    return [self._to_schema(row) for row in result.scalars().all()]
+            except Exception as exc:
+                self._disable_database(exc)
+
+        stored = list(_memory_news_articles.get(owner_id, {}).values())
+        if topic_filter:
+            stored = [article for article in stored if article.topic == topic_filter]
+        return stored[:limit]
 
     async def _fetch_raw_articles(self) -> List[Dict[str, Any]]:
         sources = [source for source in self.config.get("sources", []) if source.get("type", "rss").lower() == "rss"]
@@ -141,7 +230,7 @@ class NewsService:
         )
         articles: List[Dict[str, Any]] = []
         for source, response in zip(sources, responses):
-            if isinstance(response, Exception):
+            if isinstance(response, BaseException):
                 logger.warning("RSS source '%s' failed: %s", source.get("name", source.get("url")), response)
                 continue
             articles.extend(response)
@@ -211,3 +300,49 @@ class NewsService:
         if not normalized:
             return f"Articol relevant pentru categoria {topic}."
         return normalized[:360].rstrip() + ("..." if len(normalized) > 360 else "")
+
+    @staticmethod
+    def _naive_datetime(value: Optional[datetime]) -> Optional[datetime]:
+        if value is None:
+            return None
+        if value.tzinfo is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+
+    @staticmethod
+    def _to_schema(article: NewsArticle) -> NewsArticleSchema:
+        return NewsArticleSchema(
+            id=article.id,
+            title=article.title,
+            url=article.url,
+            source_name=article.source_name,
+            topic=article.topic,
+            published_at=article.published_at,
+            content=article.content,
+            summary=article.summary,
+            relevance_score=article.relevance_score or 0.0,
+            fingerprint=article.fingerprint,
+        )
+
+    async def _can_use_database(self) -> bool:
+        if not self._db_available:
+            if not settings.persistence_fallback_allowed:
+                raise PersistenceException("News database is unavailable")
+            return False
+        if self._schema_ready:
+            return True
+        try:
+            async with self.database_engine.connect() as connection:
+                await connection.execute(text("SELECT 1"))
+            self._schema_ready = True
+            return True
+        except Exception as exc:
+            self._disable_database(exc)
+            return False
+
+    def _disable_database(self, exc: Exception) -> None:
+        if self._db_available:
+            logger.warning("News database unavailable; using memory fallback (%s).", type(exc).__name__)
+        self._db_available = False
+        if not settings.persistence_fallback_allowed:
+            raise PersistenceException(f"News database is unavailable: {exc}") from exc

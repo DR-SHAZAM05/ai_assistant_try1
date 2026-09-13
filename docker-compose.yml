@@ -29,6 +29,7 @@ services:
       - ./knowledge_base:/app/knowledge_base
       - ./config:/app/config
       - ./tests:/app/tests
+      - ./database:/app/database
     depends_on:
       postgres:
         condition: service_healthy

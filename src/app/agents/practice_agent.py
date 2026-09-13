@@ -9,6 +9,7 @@ from src.app.services.practice_history_service import PracticeHistoryService
 from src.app.core.config import settings
 from src.app.core.logging import logger
 from src.app.core.exceptions import LLMProviderException, RAGRetrievalException
+from src.app.core.user_scope import require_user_id
 
 
 class PracticeAgent:
@@ -62,12 +63,15 @@ class PracticeAgent:
         user_prompt: str,
         academic_year: Optional[str] = None,
         history: Optional[List[Dict[str, str]]] = None,
+        user_id: Optional[str] = None,
+        persist_history: bool = True,
     ) -> Dict[str, Any]:
         """
         Main execution flow:
         User Question -> Determine Academic Year -> RAG Retriever Search ->
         Anti-Hallucination Check -> LLM Synthesis -> Response + Citations
         """
+        owner_id = require_user_id(user_id)
         target_year = academic_year or self.detect_academic_year(user_prompt)
         logger.info(
             "PracticeAgent processing query (query_length=%s, academic_year=%s).",
@@ -182,6 +186,20 @@ class PracticeAgent:
         sources_formatted = ", ".join([f"`{s['filename']}` (pagina {s['page']})" for s in sources_list])
         response_text = f"{answer}\n\n📚 **Surse**: {sources_formatted} [{target_year}]"
 
+        if persist_history:
+            await self.practice_history_service.save_exchange(
+                user_id=owner_id,
+                academic_year=target_year,
+                topic=self._history_topic(user_prompt),
+                question_summary=user_prompt,
+                answer_summary=answer,
+                source_type="telegram",
+                source_reference=",".join(
+                    str(source["filename"]) for source in sources_list[:3]
+                )[:256] or None,
+                tags=["practice", "rag", *self._history_tags(user_prompt)],
+            )
+
         return {
             "text": response_text,
             "raw_answer": answer,
@@ -193,13 +211,16 @@ class PracticeAgent:
     async def handle_historical_practice_query(
         self,
         user_prompt: str,
-        academic_year: Optional[str] = None
+        academic_year: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
+        owner_id = require_user_id(user_id)
         target_year = academic_year or self.detect_historical_academic_year(user_prompt)
         history = await self.practice_history_service.find_similar(
             query=user_prompt,
             academic_year=target_year,
             limit=3,
+            user_id=owner_id,
         )
 
         if not history:
@@ -231,6 +252,31 @@ class PracticeAgent:
             "history_count": len(history),
             "academic_year": target_year,
         }
+
+    @staticmethod
+    def _history_topic(user_prompt: str) -> str:
+        normalized = PracticeAgent._normalize_for_match(user_prompt)
+        for marker, topic in (
+            ("erasmus", "erasmus"),
+            ("convent", "conventie practica"),
+            ("caiet", "caiet practica"),
+            ("colocviu", "colocviu practica"),
+            ("certificat", "certificat practica"),
+            ("deadline", "deadline practica"),
+            ("termen", "deadline practica"),
+        ):
+            if marker in normalized:
+                return topic
+        return "practica"
+
+    @staticmethod
+    def _history_tags(user_prompt: str) -> List[str]:
+        normalized = PracticeAgent._normalize_for_match(user_prompt)
+        tags = []
+        for marker in ("erasmus", "conventie", "caiet", "colocviu", "certificat", "deadline"):
+            if marker in normalized:
+                tags.append(marker)
+        return tags
 
     @staticmethod
     def _build_extractive_answer(chunks: List[Dict[str, Any]], academic_year: str) -> str:

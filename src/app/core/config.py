@@ -152,6 +152,15 @@ class Settings(BaseSettings):
         return self.ALLOW_MOCK_PROVIDERS and not self.is_production
 
     @property
+    def persistence_fallback_allowed(self) -> bool:
+        """Allow process-local persistence only in isolated automated tests.
+
+        Development and deployment must surface a PostgreSQL outage instead of
+        serving data from a cache that disappears on restart.
+        """
+        return self.ALLOW_MOCK_PROVIDERS and self.APP_ENV.lower() in {"test", "testing"}
+
+    @property
     def effective_database_url(self) -> str:
         """Use an explicit URL when supplied, otherwise build one from PostgreSQL fields."""
         if self.DATABASE_URL:
@@ -223,6 +232,11 @@ class Settings(BaseSettings):
             except Exception:
                 pass
         return None
+
+    @property
+    def persistence_fallback_allowed(self) -> bool:
+        """Allow in-memory fallback only in test or development environments."""
+        return self.APP_ENV.lower() in {"test", "testing", "dev", "development"} or self.ALLOW_MOCK_PROVIDERS
 
     def production_validation_errors(self) -> list[str]:
         if not self.is_production:

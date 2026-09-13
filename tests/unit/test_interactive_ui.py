@@ -126,7 +126,8 @@ async def test_orchestrator_callback_task_completion():
     item = await action_service.create_action_item(
         title="Test callback completion task",
         source="test",
-        priority="high"
+        priority="high",
+        user_id="u_task",
     )
     task_id = item["id"]
 
@@ -136,5 +137,5 @@ async def test_orchestrator_callback_task_completion():
     assert "finalizată" in complete_res["response"] or "finalizata" in complete_res["response"]
 
     # Verify status in service
-    completed_items = await action_service.list_action_items(status="completed")
+    completed_items = await action_service.list_action_items(status="completed", user_id="u_task")
     assert any(it["id"] == task_id for it in completed_items)

@@ -37,7 +37,8 @@ class EmailAgent:
         self,
         user_prompt: str,
         account_type: Optional[str] = None,
-        is_important_only: bool = False
+        is_important_only: bool = False,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Handles general email search/list requests.
@@ -48,7 +49,8 @@ class EmailAgent:
         try:
             emails = await self.email_service.list_emails(
                 account_type=target_account,
-                filter_params=EmailFilterParams(account_type=target_account, is_important_only=is_important_only, limit=5)
+                filter_params=EmailFilterParams(account_type=target_account, is_important_only=is_important_only, limit=5),
+                user_id=user_id,
             )
         except Exception as exc:
             logger.warning("Email service unavailable for %s (%s): %s", target_account, type(exc).__name__, exc)
@@ -93,7 +95,8 @@ class EmailAgent:
     async def handle_action_items_query(
         self,
         user_prompt: str,
-        account_type: Optional[str] = None
+        account_type: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Extracts action items and deadlines from emails.
@@ -102,7 +105,8 @@ class EmailAgent:
         try:
             emails = await self.email_service.list_emails(
                 account_type=target_account,
-                filter_params=EmailFilterParams(account_type=target_account, limit=10)
+                filter_params=EmailFilterParams(account_type=target_account, limit=10),
+                user_id=user_id,
             )
         except Exception as exc:
             logger.warning("Email service unavailable for action items (%s): %s", target_account, exc)
@@ -130,7 +134,8 @@ class EmailAgent:
                     source=f"email_{target_account}",
                     deadline=deadline_dt,
                     priority=priority,
-                    source_reference=e.message_id
+                    source_reference=e.message_id,
+                    user_id=user_id,
                 )
 
                 actions_found.append({
@@ -183,7 +188,8 @@ class EmailAgent:
             try:
                 recent_emails = await self.email_service.list_emails(
                     account_type=target_account,
-                    filter_params=EmailFilterParams(account_type=target_account, limit=10)
+                    filter_params=EmailFilterParams(account_type=target_account, limit=10),
+                    user_id=owner_id,
                 )
                 if recent_emails:
                     idx_match = re.search(r"(?i)\b(?:mailul|emailul|mesajul|nr\.?)\s*(\d+)\b", user_prompt)

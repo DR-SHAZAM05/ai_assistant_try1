@@ -43,7 +43,10 @@ async def telegram_webhook(
     callback_query = getattr(update, "callback_query", None)
     if callback_query and callback_query.message and callback_query.data:
         chat_id = callback_query.message.chat.id
-        sender_id = str(callback_query.from_user.id) if callback_query.from_user else str(chat_id)
+        if not callback_query.from_user:
+            logger.warning("Ignored Telegram callback without a sender identity.")
+            return {"status": "ignored", "reason": "missing_sender"}
+        sender_id = str(callback_query.from_user.id)
         user_text = callback_query.data
         try:
             await telegram_service.answer_callback_query(callback_query.id)
@@ -55,7 +58,10 @@ async def telegram_webhook(
             logger.info(f"Received Telegram update_id {update.update_id} without text message. Skipping.")
             return {"status": "ignored", "reason": "no_text_message"}
         chat_id = message.chat.id
-        sender_id = str(message.from_user.id) if message.from_user else str(chat_id)
+        if not message.from_user:
+            logger.warning("Ignored Telegram message without a sender identity.")
+            return {"status": "ignored", "reason": "missing_sender"}
+        sender_id = str(message.from_user.id)
         user_text = message.text
 
     if settings.telegram_allowed_user_ids and sender_id not in settings.telegram_allowed_user_ids:
@@ -116,10 +122,16 @@ async def telegram_webhook(
         except Exception:
             pass
 
-        session_id = str(chat_id)
+        # In group chats the chat is transport context, not the data owner.
+        # Service queries are always additionally scoped by the sender id.
+        session_id = f"telegram:{chat_id}"
         history = []
         try:
-            history = await memory_service.get_history(session_id=session_id, limit=8)
+            history = await memory_service.get_history(
+                session_id=session_id,
+                user_id=sender_id,
+                limit=8,
+            )
         except Exception as mem_fetch_err:
             logger.warning("Failed to fetch conversation history: %s", mem_fetch_err)
 
@@ -128,7 +140,7 @@ async def telegram_webhook(
         try:
             orchestrator_result = await orchestrator.process_request(
                 user_prompt=user_text,
-                user_id=session_id,
+                user_id=sender_id,
                 history=history,
             )
             response_text = orchestrator_result.get("response", "Nu am putut procesa mesajul tău.")
@@ -148,13 +160,15 @@ async def telegram_webhook(
                 session_id=session_id,
                 sender_role="user",
                 content=user_text,
-                telegram_chat_id=session_id,
+                telegram_chat_id=str(chat_id),
+                user_id=sender_id,
             )
             await memory_service.add_message(
                 session_id=session_id,
                 sender_role="assistant",
                 content=response_text,
-                telegram_chat_id=session_id,
+                telegram_chat_id=str(chat_id),
+                user_id=sender_id,
             )
         except Exception as mem_store_err:
             logger.warning("Failed to persist conversation turn: %s", mem_store_err)

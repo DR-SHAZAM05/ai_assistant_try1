@@ -14,7 +14,8 @@ class NewsAgent:
     async def handle_news_query(
         self,
         user_prompt: str,
-        topic: Optional[str] = None
+        topic: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Processes natural language news queries (e.g., 'Ce știri importante sunt despre AI?').
@@ -34,7 +35,10 @@ class NewsAgent:
 
         logger.info(f"NewsAgent processing news query for topic '{target_topic or 'All Topics'}'...")
 
-        articles = await self.news_service.fetch_and_process_news(topic_filter=target_topic)
+        articles = await self.news_service.fetch_and_process_news(
+            topic_filter=target_topic,
+            user_id=user_id,
+        )
 
         if not articles:
             topic_str = f" despre **{target_topic}**" if target_topic else ""

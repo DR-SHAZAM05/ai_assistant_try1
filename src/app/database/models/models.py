@@ -52,19 +52,26 @@ class EmailAccount(Base):
 
 class Email(Base):
     __tablename__ = "emails"
+    __table_args__ = (
+        UniqueConstraint("user_id", "account_type", "message_id", name="uq_emails_user_account_message"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    message_id = Column(String(256), unique=True, index=True, nullable=False)
+    user_id = Column(String(64), index=True, nullable=False)
+    message_id = Column(String(256), index=True, nullable=False)
     account_type = Column(String(32), nullable=False)
     sender = Column(String(256), nullable=False)
+    recipients = Column(JSON, nullable=True)
     subject = Column(String(512), nullable=True)
     body_text = Column(Text, nullable=True)
     received_at = Column(DateTime, nullable=False)
     summary = Column(Text, nullable=True)
     category = Column(String(64), nullable=True)
+    importance = Column(String(32), nullable=True)
     is_practice_related = Column(Boolean, default=False)
     requires_action = Column(Boolean, default=False)
     detected_deadline = Column(DateTime, nullable=True)
+    actions = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -90,6 +97,7 @@ class PracticeQuestion(Base):
     __tablename__ = "practice_questions"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), index=True, nullable=False)
     academic_year = Column(String(32), index=True, nullable=False)
     student_name = Column(String(128), nullable=True)
     student_group = Column(String(32), nullable=True)
@@ -107,6 +115,7 @@ class PracticeAnswer(Base):
     __tablename__ = "practice_answers"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), index=True, nullable=False)
     question_id = Column(Integer, ForeignKey("practice_questions.id", ondelete="CASCADE"), nullable=False)
     answer_summary = Column(Text, nullable=False)
     decision = Column(String(128), nullable=True)
@@ -142,6 +151,7 @@ class ActionItem(Base):
     __tablename__ = "action_items"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), index=True, nullable=False)
     title = Column(String(256), nullable=False)
     source = Column(String(64), nullable=False) # "email", "calendar", "practice"
     deadline = Column(DateTime, nullable=True)
@@ -153,10 +163,14 @@ class ActionItem(Base):
 
 class Conversation(Base):
     __tablename__ = "conversations"
+    __table_args__ = (
+        UniqueConstraint("user_id", "session_id", name="uq_conversations_user_session"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), index=True, nullable=False)
     telegram_chat_id = Column(String(64), index=True, nullable=False)
-    session_id = Column(String(64), unique=True, nullable=False)
+    session_id = Column(String(64), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     messages = relationship("ConversationMessage", back_populates="conversation", cascade="all, delete-orphan")
@@ -177,9 +191,13 @@ class ConversationMessage(Base):
 
 class UserMemory(Base):
     __tablename__ = "user_memories"
+    __table_args__ = (
+        UniqueConstraint("user_id", "key", name="uq_user_memory_user_key"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    key = Column(String(128), unique=True, index=True, nullable=False)
+    user_id = Column(String(64), index=True, nullable=False)
+    key = Column(String(128), index=True, nullable=False)
     value = Column(Text, nullable=False)
     category = Column(String(64), nullable=True) # e.g. "preference", "rule"
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -187,12 +205,19 @@ class UserMemory(Base):
 
 class NewsArticle(Base):
     __tablename__ = "news_articles"
+    __table_args__ = (
+        UniqueConstraint("user_id", "url", name="uq_news_article_user_url"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), index=True, nullable=False)
     title = Column(String(512), nullable=False)
-    url = Column(String(1024), unique=True, nullable=False)
+    url = Column(String(1024), nullable=False)
+    source_name = Column(String(256), nullable=False, default="RSS")
+    fingerprint = Column(String(64), index=True, nullable=True)
     topic = Column(String(64), nullable=False)
     relevance_score = Column(Float, default=0.0)
+    content = Column(Text, nullable=True)
     summary = Column(Text, nullable=True)
     published_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -202,6 +227,7 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), index=True, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
     user_request = Column(Text, nullable=True)
     selected_tool = Column(String(128), nullable=True)

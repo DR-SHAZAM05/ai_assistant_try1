@@ -1,4 +1,4 @@
-﻿import re
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -9,6 +9,7 @@ from sqlalchemy import select, text
 from src.app.core.config import settings
 from src.app.core.exceptions import PersistenceException
 from src.app.core.logging import logger
+from src.app.core.user_scope import require_user_id
 from src.app.database.models.models import AuditLog
 from src.app.database.session import AsyncSessionLocal, engine
 
@@ -19,6 +20,7 @@ def _utcnow_naive() -> datetime:
 
 @dataclass
 class AuditLogRecord:
+    user_id: str
     timestamp: datetime
     user_request: Optional[str]
     selected_tool: Optional[str]
@@ -29,7 +31,7 @@ class AuditLogRecord:
     rag_sources: Optional[List[Dict[str, Any]]] = None
 
 
-_memory_audit_logs: List[AuditLogRecord] = []
+_memory_audit_logs: Dict[str, List[AuditLogRecord]] = {}
 
 
 class AuditService:
@@ -39,8 +41,9 @@ class AuditService:
     with automatic redaction of sensitive credentials and personal data.
     """
 
-    def __init__(self, session_factory=AsyncSessionLocal):
+    def __init__(self, session_factory=AsyncSessionLocal, database_engine=engine):
         self.session_factory = session_factory
+        self.database_engine = database_engine
         self._schema_ready = False
         self._db_available = True
 
@@ -69,14 +72,17 @@ class AuditService:
         execution_duration_ms: Optional[float] = None,
         external_operation: Optional[str] = None,
         rag_sources: Optional[List[Dict[str, Any]]] = None,
-    ) -> AuditLogRecord:
+        user_id: Optional[str] = None,
+    ) -> Optional[AuditLogRecord]:
         if not settings.AUDIT_LOG_ENABLED:
             return None
 
+        owner_id = require_user_id(user_id)
         sanitized_request = (
             self.sanitize_text(user_request) if settings.AUDIT_LOG_STORE_REQUEST_CONTENT else None
         )
         record = AuditLogRecord(
+            user_id=owner_id,
             timestamp=_utcnow_naive(),
             user_request=sanitized_request,
             selected_tool=selected_tool,
@@ -88,12 +94,13 @@ class AuditService:
         )
 
         if not await self._can_use_database():
-            _memory_audit_logs.append(record)
+            _memory_audit_logs.setdefault(owner_id, []).append(record)
             return record
 
         try:
             async with self.session_factory() as session:
                 log_entry = AuditLog(
+                    user_id=owner_id,
                     timestamp=record.timestamp,
                     user_request=record.user_request,
                     selected_tool=record.selected_tool,
@@ -105,22 +112,33 @@ class AuditService:
                 )
                 session.add(log_entry)
                 await session.commit()
-                _memory_audit_logs.append(record)
+                _memory_audit_logs.setdefault(owner_id, []).append(record)
                 return record
         except Exception as exc:
             self._disable_database(exc)
-            _memory_audit_logs.append(record)
+            _memory_audit_logs.setdefault(owner_id, []).append(record)
             return record
 
-    async def get_recent_logs(self, limit: int = 10) -> List[AuditLogRecord]:
+    async def get_recent_logs(
+        self,
+        limit: int = 10,
+        user_id: Optional[str] = None,
+    ) -> List[AuditLogRecord]:
+        owner_id = require_user_id(user_id)
         if await self._can_use_database():
             try:
                 async with self.session_factory() as session:
-                    stmt = select(AuditLog).order_by(AuditLog.id.desc()).limit(limit)
+                    stmt = (
+                        select(AuditLog)
+                        .where(AuditLog.user_id == owner_id)
+                        .order_by(AuditLog.id.desc())
+                        .limit(limit)
+                    )
                     result = await session.execute(stmt)
                     rows = result.scalars().all()
                     return [
                         AuditLogRecord(
+                            user_id=row.user_id,
                             timestamp=row.timestamp,
                             user_request=row.user_request,
                             selected_tool=row.selected_tool,
@@ -135,18 +153,18 @@ class AuditService:
             except Exception as exc:
                 self._disable_database(exc)
 
-        return list(reversed(_memory_audit_logs[-limit:]))
+        return list(reversed(_memory_audit_logs.get(owner_id, [])[-limit:]))
 
     async def _can_use_database(self) -> bool:
         if not self._db_available:
-            if not settings.mocks_allowed:
+            if not settings.persistence_fallback_allowed:
                 raise PersistenceException("Audit database is unavailable")
             return False
         if self._schema_ready:
             return True
 
         try:
-            async with engine.connect() as connection:
+            async with self.database_engine.connect() as connection:
                 await connection.execute(text("SELECT 1"))
             self._schema_ready = True
             return True
@@ -158,5 +176,5 @@ class AuditService:
         if self._db_available:
             logger.warning("Audit log database unavailable; using memory fallback (%s).", type(exc).__name__)
         self._db_available = False
-        if not settings.mocks_allowed:
+        if not settings.persistence_fallback_allowed:
             raise PersistenceException(f"Audit database is unavailable: {exc}") from exc
