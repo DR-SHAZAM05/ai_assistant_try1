@@ -133,11 +133,11 @@ async def telegram_webhook(
             )
             response_text = orchestrator_result.get("response", "Nu am putut procesa mesajul tău.")
             intent = orchestrator_result.get("intent")
-        except Exception as exc:
-            logger.exception("Error processing request in orchestrator: %s", exc)
+        except Exception:
+            logger.exception("Error processing request in orchestrator")
             response_text = (
-                f"⚠️ Am întâmpinat o problemă la procesarea cererii:\n{exc}\n\n"
-                "Verifică dacă integrările necesare (ex. Google Calendar, Email) sunt autorizate corespunzător."
+                "⚠️ Nu am putut procesa cererea în acest moment. "
+                "Verifică integrarea necesară și încearcă din nou."
             )
             intent = "error"
             orchestrator_result = {"response": response_text, "intent": "error"}
@@ -200,12 +200,12 @@ async def telegram_webhook(
             "telegram_sent": send_success,
             "response_summary": response_text[:100] + "..." if len(response_text) > 100 else response_text
         }
-    except Exception as pipeline_err:
-        logger.exception("Fatal unhandled error in telegram_webhook: %s", pipeline_err)
+    except Exception:
+        logger.exception("Fatal unhandled error in telegram_webhook")
         try:
             await telegram_service.send_message(
                 chat_id=chat_id,
-                text=f"⚠️ A apărut o problemă la procesarea mesajului: {pipeline_err}\nTe rog să reîncerci.",
+                text="⚠️ A apărut o problemă la procesarea mesajului. Te rog să reîncerci.",
                 reply_markup=get_main_menu_keyboard(),
             )
         except Exception:
@@ -213,7 +213,7 @@ async def telegram_webhook(
         return {
             "status": "error",
             "chat_id": chat_id,
-            "error": str(pipeline_err),
+            "error": "message_processing_failed",
         }
 
 

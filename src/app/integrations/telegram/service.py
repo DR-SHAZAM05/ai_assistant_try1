@@ -86,7 +86,8 @@ class TelegramService:
     async def set_bot_commands(self) -> bool:
         """Register Telegram Bot commands to display the blue Menu button in the chat."""
         if not self._has_valid_token:
-            return True
+            logger.warning("Telegram bot commands were not registered because the bot token is invalid.")
+            return False
         commands = [
             {"command": "start", "description": "Afișează meniul principal și tastele rapide"},
             {"command": "briefing", "description": "Sinteza zilei (Calendar + Sarcini + Știri)"},
@@ -204,10 +205,9 @@ class TelegramService:
 
     async def set_webhook(self, webhook_url: str, secret_token: Optional[str] = None) -> bool:
         if not self._has_valid_token:
-            if settings.mocks_allowed:
-                logger.info("[Development Telegram mock] webhook would be set to %s", webhook_url)
-                return True
-            raise ConfigurationException("TELEGRAM_BOT_TOKEN is required to configure the Telegram webhook")
+            # Configuring a webhook changes external Bot API state. It must never
+            # report a development mock success when Telegram was not contacted.
+            raise ConfigurationException("A valid TELEGRAM_BOT_TOKEN is required to configure the Telegram webhook")
         if not webhook_url.startswith("https://"):
             raise ConfigurationException("Telegram requires a public HTTPS webhook URL")
 
@@ -290,4 +290,3 @@ class TelegramService:
             fallback_data.pop("parse_mode", None)
             return await self._post_multipart(method, fallback_data, files, retry_without_parse_mode=False)
         raise IntegrationException(f"Telegram API returned HTTP {response.status_code}")
-

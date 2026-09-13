@@ -25,6 +25,17 @@ async def test_telegram_configuration_cannot_report_a_mock_success_in_production
         await TelegramService().send_message(123, "test")
 
 
+@pytest.mark.asyncio
+async def test_webhook_configuration_never_reports_mock_success_for_an_invalid_token(monkeypatch):
+    monkeypatch.setattr(settings, "APP_ENV", "development")
+    monkeypatch.setattr(settings, "ALLOW_MOCK_PROVIDERS", True)
+
+    with pytest.raises(ConfigurationException, match="valid TELEGRAM_BOT_TOKEN"):
+        await TelegramService(bot_token="not-a-bot-token").set_webhook(
+            "https://example.invalid/telegram/webhook"
+        )
+
+
 def test_malformed_telegram_token_is_not_treated_as_configured(monkeypatch):
     monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "not-a-bot-token")
 

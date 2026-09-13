@@ -30,10 +30,25 @@ async def lifespan(app: FastAPI):
     if is_valid_telegram_bot_token(settings.TELEGRAM_BOT_TOKEN):
         try:
             from src.app.integrations.telegram.service import TelegramService
-            await TelegramService().set_bot_commands()
-            logger.info("Registered official Telegram Bot commands with Telegram Bot API.")
+
+            telegram_service = TelegramService()
+            if await telegram_service.set_bot_commands():
+                logger.info("Registered Telegram bot commands with the Bot API.")
+            else:
+                logger.warning("Telegram Bot API did not accept bot command registration.")
+
+            if settings.TELEGRAM_WEBHOOK_URL:
+                if not settings.has_valid_telegram_webhook_url:
+                    logger.warning("Telegram webhook was not registered because TELEGRAM_WEBHOOK_URL is invalid.")
+                elif not settings.has_valid_telegram_webhook_secret:
+                    logger.warning("Telegram webhook was not registered because TELEGRAM_WEBHOOK_SECRET is invalid.")
+                elif await telegram_service.set_webhook(
+                    settings.TELEGRAM_WEBHOOK_URL,
+                    settings.TELEGRAM_WEBHOOK_SECRET,
+                ):
+                    logger.info("Registered Telegram webhook with the Bot API.")
         except Exception as exc:
-            logger.warning("Failed to register Telegram Bot commands on startup: %s", exc)
+            logger.warning("Failed to configure Telegram on startup: %s", exc)
     try:
         yield
     finally:
