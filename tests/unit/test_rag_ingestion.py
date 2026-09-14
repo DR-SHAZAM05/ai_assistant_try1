@@ -108,7 +108,7 @@ def test_chunking_stops_after_the_terminal_fragment(tmp_path):
 async def test_mock_embedding_provider():
     provider = MockEmbeddingProvider()
     vec = await provider.embed_text("Practică UNITBV 2026-2027")
-    assert len(vec) == 1536
+    assert len(vec) == settings.EMBEDDING_VECTOR_SIZE
     # Verify vector normalization
     assert abs(sum(x * x for x in vec) - 1.0) < 1e-4
 
@@ -116,7 +116,7 @@ async def test_mock_embedding_provider():
 @pytest.mark.asyncio
 async def test_mock_qdrant_vector_store():
     store = MockQdrantVectorStore()
-    await store.init_collection(vector_size=1536)
+    await store.init_collection(vector_size=settings.EMBEDDING_VECTOR_SIZE)
     assert store.collection_name == "practice_knowledge"
 
 

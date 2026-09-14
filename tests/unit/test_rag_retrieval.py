@@ -111,20 +111,31 @@ async def test_retrieval_filters_by_academic_year():
 
 
 @pytest.mark.asyncio
-async def test_qdrant_store_uses_query_points_api():
-    class FakeQueryResponse:
-        def __init__(self):
-            self.points = [
+async def test_qdrant_store_uses_search_api():
+    """QdrantVectorStore uses client.search() — compatible with qdrant_client v1.8.x.
+
+    query_points() was only added in qdrant_client>=1.10. This test verifies
+    the store delegates correctly to the v1.8.x search() method.
+    """
+
+    class FakeClient:
+        def search(
+            self,
+            *,
+            collection_name,
+            query_vector,
+            query_filter,
+            limit,
+            score_threshold,
+            with_payload,
+        ):
+            assert query_vector == [0.1, 0.2]
+            assert limit == 3
+            return [
                 type("Point", (), {"score": 0.91, "payload": {"academic_year": "2026-2027"}})()
             ]
 
-    class FakeClient:
-        def query_points(self, **kwargs):
-            assert kwargs["query"] == [0.1, 0.2]
-            assert kwargs["limit"] == 3
-            return FakeQueryResponse()
-
-    store = QdrantVectorStore(collection_name="query_points_contract")
+    store = QdrantVectorStore(collection_name="search_api_contract")
     store.client = FakeClient()
     results = await store.search_similarity(
         query_vector=[0.1, 0.2],

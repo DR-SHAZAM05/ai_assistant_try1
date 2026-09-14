@@ -78,10 +78,12 @@ class DocumentChunker:
     def chunk_document(
         self,
         file_path: Path,
-        academic_year: str
+        academic_year: str,
+        category: str = "general",
     ) -> List[RAGChunkSchema]:
         """
         Loads document, extracts text, computes checksum, and returns chunk objects.
+        Each chunk is traceable to the source document via chunk_id, document_id, source_path.
         """
         checksum = self.compute_file_checksum(file_path)
         pages_text = self.extract_text_from_file(file_path)
@@ -123,7 +125,9 @@ class DocumentChunker:
                         source_path=str(file_path),
                         text=chunk_text,
                         checksum=checksum,
-                        document_type=doc_type
+                        document_type=doc_type,
+                        category=category,
+                        user_id=None,  # KB documents are always global/public
                     ))
                     global_chunk_idx += 1
 
@@ -134,5 +138,5 @@ class DocumentChunker:
                 # here would otherwise walk one character at a time near EOF.
                 start = max(start + 1, end - self.chunk_overlap)
 
-        logger.info(f"Chunked document '{file_path.name}' into {len(chunks)} chunks.")
+        logger.info(f"Chunked document '{file_path.name}' into {len(chunks)} chunks (category={category}).")
         return chunks

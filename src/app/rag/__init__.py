@@ -3,6 +3,7 @@ from src.app.rag.embeddings import EmbeddingProvider, get_embedding_provider
 from src.app.rag.vector_store import QdrantVectorStore
 from src.app.rag.ingestion import IngestionPipeline
 from src.app.rag.retrieval import RAGRetriever
+from src.app.rag.qa_indexing import QAIndexingService
 
 __all__ = [
     "DocumentChunker",
@@ -10,5 +11,6 @@ __all__ = [
     "get_embedding_provider",
     "QdrantVectorStore",
     "IngestionPipeline",
-    "RAGRetriever"
+    "RAGRetriever",
+    "QAIndexingService",
 ]

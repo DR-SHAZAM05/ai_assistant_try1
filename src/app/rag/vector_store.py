@@ -9,6 +9,31 @@ from src.app.core.logging import logger
 from src.app.core.exceptions import RAGRetrievalException
 
 
+def _build_chunk_payload(chunk: RAGChunkSchema) -> Dict[str, Any]:
+    created_at = (chunk.metadata or {}).get("created_at") or (chunk.metadata or {}).get("indexed_at")
+    indexed_at = (chunk.metadata or {}).get("indexed_at") or created_at
+    return {
+        "chunk_id": chunk.chunk_id,
+        "document_id": chunk.document_id,
+        "filename": chunk.filename,
+        "file_name": chunk.filename,
+        "file_path": chunk.source_path,
+        "source": chunk.source_path,
+        "source_path": chunk.source_path,
+        "academic_year": chunk.academic_year,
+        "page": chunk.page,
+        "chunk_index": chunk.chunk_index,
+        "text": chunk.text,
+        "checksum": chunk.checksum,
+        "document_type": chunk.document_type,
+        "category": chunk.category,
+        "user_id": chunk.user_id,  # None = global/public
+        "created_at": created_at,
+        "indexed_at": indexed_at,
+        "metadata": chunk.metadata or {},
+    }
+
+
 class MockQdrantVectorStore:
     """
     In-memory fallback vector store used for unit tests and local execution when Qdrant container is offline.
@@ -31,18 +56,7 @@ class MockQdrantVectorStore:
 
     async def upsert_chunks(self, chunks: List[RAGChunkSchema], vectors: List[List[float]]) -> int:
         for chunk, vector in zip(chunks, vectors):
-            payload = {
-                "chunk_id": chunk.chunk_id,
-                "document_id": chunk.document_id,
-                "filename": chunk.filename,
-                "academic_year": chunk.academic_year,
-                "page": chunk.page,
-                "chunk_index": chunk.chunk_index,
-                "source_path": chunk.source_path,
-                "text": chunk.text,
-                "checksum": chunk.checksum,
-                "document_type": chunk.document_type
-            }
+            payload = _build_chunk_payload(chunk)
             # Remove existing chunk with same chunk_id before upsert.
             self.points[:] = [p for p in self.points if p["payload"]["chunk_id"] != chunk.chunk_id]
             self.points.append({"id": chunk.chunk_id, "vector": vector, "payload": payload})
@@ -54,6 +68,7 @@ class MockQdrantVectorStore:
         self,
         query_vector: List[float],
         academic_year: Optional[str] = None,
+        user_id: Optional[str] = None,
         top_k: int = 5,
         score_threshold: float = 0.35,
         query_text: Optional[str] = None
@@ -71,6 +86,18 @@ class MockQdrantVectorStore:
                 else:
                     if chunk_year != academic_year and chunk_year != "general":
                         continue
+
+            # User isolation filter:
+            # - user_id=None in query → return only global/public documents
+            # - user_id set → return user's own documents + global/public (user_id=None)
+            if user_id is not None:
+                chunk_user = payload.get("user_id")
+                if chunk_user is not None and chunk_user != user_id:
+                    continue
+            else:
+                # No user_id in query → return only global documents
+                if payload.get("user_id") is not None:
+                    continue
 
             # Compute cosine similarity
             v = item["vector"]
@@ -97,6 +124,7 @@ class MockQdrantVectorStore:
         academic_year: Optional[str] = None,
         source_path: Optional[str] = None,
         checksum: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> int:
         before = len(self.points)
 
@@ -111,6 +139,8 @@ class MockQdrantVectorStore:
                 checks.append(payload.get("source_path") == source_path)
             if checksum:
                 checks.append(payload.get("checksum") == checksum)
+            if user_id is not None:
+                checks.append(payload.get("user_id") == user_id)
             return bool(checks) and all(checks)
 
         self.points[:] = [p for p in self.points if not should_delete(p)]
@@ -187,11 +217,11 @@ class QdrantVectorStore:
     def _connect(self):
         try:
             from qdrant_client import QdrantClient
+            # check_compatibility was introduced in qdrant_client>=1.10; omit for v1.8 compatibility.
             self.client = QdrantClient(
                 url=self.qdrant_url,
                 api_key=settings.QDRANT_API_KEY or None,
                 timeout=0.25 if settings.mocks_allowed else settings.EXTERNAL_REQUEST_TIMEOUT_SECONDS,
-                check_compatibility=False,
             )
             logger.info(f"Initialized Qdrant client for {self.qdrant_url}")
         except Exception as e:
@@ -268,18 +298,7 @@ class QdrantVectorStore:
             points = []
             for chunk, vector in zip(chunks, vectors):
                 point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk.chunk_id))
-                payload = {
-                    "chunk_id": chunk.chunk_id,
-                    "document_id": chunk.document_id,
-                    "filename": chunk.filename,
-                    "academic_year": chunk.academic_year,
-                    "page": chunk.page,
-                    "chunk_index": chunk.chunk_index,
-                    "source_path": chunk.source_path,
-                    "text": chunk.text,
-                    "checksum": chunk.checksum,
-                    "document_type": chunk.document_type
-                }
+                payload = _build_chunk_payload(chunk)
                 points.append(models.PointStruct(id=point_id, vector=vector, payload=payload))
 
             await asyncio.to_thread(self.client.upsert, collection_name=self.collection_name, points=points, wait=True)
@@ -293,52 +312,90 @@ class QdrantVectorStore:
         self,
         query_vector: List[float],
         academic_year: Optional[str] = None,
+        user_id: Optional[str] = None,
         top_k: int = 5,
         score_threshold: float = 0.35,
         query_text: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         if await self._use_mock_or_raise():
-            return await self.mock_fallback.search_similarity(query_vector, academic_year, top_k, score_threshold, query_text)
+            return await self.mock_fallback.search_similarity(query_vector, academic_year, user_id, top_k, score_threshold, query_text)
 
         try:
             from qdrant_client.http import models
-            query_filter = None
+            must_conditions = []
 
+            # Academic year filter: include specific year + general docs
             if academic_year:
                 if academic_year == "general":
-                    query_filter = models.Filter(
-                        must=[
-                            models.FieldCondition(
-                                key="academic_year",
-                                match=models.MatchValue(value="general")
-                            )
-                        ]
+                    must_conditions.append(
+                        models.FieldCondition(
+                            key="academic_year",
+                            match=models.MatchValue(value="general")
+                        )
                     )
                 else:
-                    query_filter = models.Filter(
-                        should=[
-                            models.FieldCondition(
-                                key="academic_year",
-                                match=models.MatchValue(value=academic_year)
-                            ),
-                            models.FieldCondition(
-                                key="academic_year",
-                                match=models.MatchValue(value="general")
-                            ),
-                        ]
+                    must_conditions.append(
+                        models.Filter(
+                            should=[
+                                models.FieldCondition(
+                                    key="academic_year",
+                                    match=models.MatchValue(value=academic_year)
+                                ),
+                                models.FieldCondition(
+                                    key="academic_year",
+                                    match=models.MatchValue(value="general")
+                                ),
+                            ]
+                        )
                     )
 
-            response = await asyncio.to_thread(
-                self.client.query_points,
-                collection_name=self.collection_name,
-                query=query_vector,
-                query_filter=query_filter,
-                limit=top_k,
-                score_threshold=score_threshold,
-            )
+            # User isolation filter:
+            # - user_id set → docs belonging to that user OR global docs (user_id is null)
+            # - user_id=None → only global/public documents (user_id is null)
+            if user_id is not None:
+                must_conditions.append(
+                    models.Filter(
+                        should=[
+                            models.FieldCondition(
+                                key="user_id",
+                                match=models.MatchValue(value=user_id)
+                            ),
+                            models.IsNullCondition(is_null=models.PayloadField(key="user_id")),
+                        ]
+                    )
+                )
+            else:
+                must_conditions.append(
+                    models.IsNullCondition(is_null=models.PayloadField(key="user_id"))
+                )
+
+            query_filter = models.Filter(must=must_conditions) if must_conditions else None
+
+            # Support modern qdrant_client (>=1.10 uses query_points, <1.10 uses search)
+            if hasattr(self.client, "query_points"):
+                response = await asyncio.to_thread(
+                    self.client.query_points,
+                    collection_name=self.collection_name,
+                    query=query_vector,
+                    query_filter=query_filter,
+                    limit=top_k,
+                    score_threshold=score_threshold,
+                    with_payload=True,
+                )
+                results = response.points if hasattr(response, "points") else response
+            else:
+                results = await asyncio.to_thread(
+                    self.client.search,
+                    collection_name=self.collection_name,
+                    query_vector=query_vector,
+                    query_filter=query_filter,
+                    limit=top_k,
+                    score_threshold=score_threshold,
+                    with_payload=True,
+                )
 
             hits = []
-            for point in response.points:
+            for point in results:
                 hits.append({
                     "score": point.score,
                     "payload": point.payload or {}
@@ -346,7 +403,7 @@ class QdrantVectorStore:
             return hits
         except Exception as e:
             fallback = await self._fallback_or_raise("similarity search", e)
-            return await fallback.search_similarity(query_vector, academic_year, top_k, score_threshold, query_text)
+            return await fallback.search_similarity(query_vector, academic_year, user_id, top_k, score_threshold, query_text)
 
     async def delete_document_vectors(
         self,
@@ -354,9 +411,10 @@ class QdrantVectorStore:
         academic_year: Optional[str] = None,
         source_path: Optional[str] = None,
         checksum: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> int:
         if await self._use_mock_or_raise():
-            return await self.mock_fallback.delete_document_vectors(document_id, academic_year, source_path, checksum)
+            return await self.mock_fallback.delete_document_vectors(document_id, academic_year, source_path, checksum, user_id)
 
         try:
             from qdrant_client.http import models
@@ -370,6 +428,8 @@ class QdrantVectorStore:
                 conditions.append(models.FieldCondition(key="source_path", match=models.MatchValue(value=source_path)))
             if checksum:
                 conditions.append(models.FieldCondition(key="checksum", match=models.MatchValue(value=checksum)))
+            if user_id is not None:
+                conditions.append(models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id)))
 
             if not conditions:
                 return 0
@@ -384,4 +444,4 @@ class QdrantVectorStore:
             return 0
         except Exception as e:
             fallback = await self._fallback_or_raise("vector deletion", e)
-            return await fallback.delete_document_vectors(document_id, academic_year, source_path, checksum)
+            return await fallback.delete_document_vectors(document_id, academic_year, source_path, checksum, user_id)

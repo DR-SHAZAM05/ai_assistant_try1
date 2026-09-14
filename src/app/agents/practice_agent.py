@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional, List
 from src.app.rag.retrieval import RAGRetriever
 from src.app.rag.ingestion import IngestionPipeline
 from src.app.rag.vector_store import QdrantVectorStore
+from src.app.rag.qa_indexing import QAIndexingService
 from src.app.llm.factory import get_llm_provider
 from src.app.services.practice_history_service import PracticeHistoryService
 from src.app.core.config import settings
@@ -23,12 +24,14 @@ class PracticeAgent:
         retriever: Optional[RAGRetriever] = None,
         llm_provider=None,
         practice_history_service: Optional[PracticeHistoryService] = None,
+        qa_indexing_service: Optional[QAIndexingService] = None,
     ):
         self.vector_store = retriever.vector_store if retriever else QdrantVectorStore()
         self.retriever = retriever or RAGRetriever(vector_store=self.vector_store)
         self.llm = llm_provider or get_llm_provider()
         self.ingestion_pipeline = IngestionPipeline(vector_store=self.vector_store)
         self.practice_history_service = practice_history_service or PracticeHistoryService()
+        self.qa_indexing_service = qa_indexing_service or QAIndexingService(vector_store=self.vector_store)
         self._is_ingested = False
 
     def detect_academic_year(self, user_prompt: str) -> str:
@@ -91,11 +94,12 @@ class PracticeAgent:
                 "academic_year": target_year
             }
 
-        # 1. RAG Search
+        # 1. RAG Search — KB documents (global) + user's own Q/A (via user_id)
         try:
             chunks = await self.retriever.retrieve_context(
                 user_query=user_prompt,
                 academic_year=target_year,
+                user_id=owner_id,
                 top_k=settings.RAG_TOP_K,
                 score_threshold=settings.RAG_SCORE_THRESHOLD
             )
@@ -187,7 +191,7 @@ class PracticeAgent:
         response_text = f"{answer}\n\n📚 **Surse**: {sources_formatted} [{target_year}]"
 
         if persist_history:
-            await self.practice_history_service.save_exchange(
+            exchange_record = await self.practice_history_service.save_exchange(
                 user_id=owner_id,
                 academic_year=target_year,
                 topic=self._history_topic(user_prompt),
@@ -198,6 +202,18 @@ class PracticeAgent:
                     str(source["filename"]) for source in sources_list[:3]
                 )[:256] or None,
                 tags=["practice", "rag", *self._history_tags(user_prompt)],
+            )
+            # Index Q/A semantically in Qdrant (non-fatal if Qdrant is unavailable)
+            await self.qa_indexing_service.index_exchange(
+                user_id=owner_id,
+                academic_year=target_year,
+                topic=self._history_topic(user_prompt),
+                question_summary=user_prompt,
+                answer_summary=answer,
+                source_type="telegram",
+                source_reference=exchange_record.source_reference,
+                tags=["practice", "rag", *self._history_tags(user_prompt)],
+                created_at=exchange_record.created_at,
             )
 
         return {
@@ -216,6 +232,64 @@ class PracticeAgent:
     ) -> Dict[str, Any]:
         owner_id = require_user_id(user_id)
         target_year = academic_year or self.detect_historical_academic_year(user_prompt)
+
+        # 1. Attempt semantic Q/A search first (via QAIndexingService / Qdrant)
+        qa_hits = []
+        try:
+            qa_hits = await self.qa_indexing_service.search_qa(
+                query=user_prompt,
+                user_id=owner_id,
+                academic_year=target_year,
+                top_k=3,
+                score_threshold=settings.RAG_SCORE_THRESHOLD,
+            )
+        except Exception as exc:
+            logger.warning("Semantic Q/A retrieval exception: %s", type(exc).__name__)
+
+        if qa_hits:
+            lines = [f"Am găsit răspunsuri istorice despre practică pentru anul universitar {target_year}:\n"]
+            sources = []
+            for idx, hit in enumerate(qa_hits, 1):
+                payload = hit.get("payload", {})
+                metadata = payload.get("metadata", {})
+                topic = metadata.get("topic") or payload.get("category", "qa").replace("qa/", "")
+                text_content = payload.get("text", "")
+
+                q_text = text_content
+                a_text = ""
+                if "Întrebare:" in text_content and "Răspuns:" in text_content:
+                    parts = text_content.split("Răspuns:", 1)
+                    q_text = parts[0].replace("Întrebare:", "").strip()
+                    a_text = parts[1].strip()
+                elif "\n" in text_content:
+                    parts = text_content.split("\n", 1)
+                    q_text = parts[0].strip()
+                    a_text = parts[1].strip()
+
+                source_type = metadata.get("source_type") or "qa_summary"
+                source_reference = metadata.get("source_reference") or payload.get("source_path")
+
+                lines.append(f"{idx}. Tema: {topic}")
+                lines.append(f"   Întrebare: {q_text}")
+                if a_text:
+                    lines.append(f"   Răspuns: {a_text}")
+                lines.append(f"   Sursă: {source_type} ({source_reference or 'fără referință'})")
+                lines.append("")
+                sources.append({
+                    "source_type": source_type,
+                    "source_reference": source_reference,
+                    "academic_year": payload.get("academic_year", target_year),
+                    "topic": topic,
+                })
+
+            return {
+                "text": "\n".join(lines).strip(),
+                "sources": sources,
+                "history_count": len(qa_hits),
+                "academic_year": target_year,
+            }
+
+        # 2. Fallback to lexical PostgreSQL history search
         history = await self.practice_history_service.find_similar(
             query=user_prompt,
             academic_year=target_year,

@@ -44,7 +44,14 @@ class IngestionPipeline:
 
     async def ingest_all(self) -> Dict[str, Any]:
         """
-        Scans all academic year subdirectories and ingests new or modified documents.
+        Scans all academic year subdirectories RECURSIVELY and ingests new or modified documents.
+        Directory structure:
+          knowledge_base/
+            <academic_year>/       e.g. 2026-2027/, general/
+              [sub-category/]      e.g. Rules/, Answers/ (optional; any depth)
+                document.pdf|txt|md
+        The academic_year is extracted from the top-level subdirectory name.
+        The category is derived from the relative path of the file within year_dir.
         """
         await self.vector_store.init_collection(vector_size=settings.EMBEDDING_VECTOR_SIZE)
 
@@ -60,15 +67,32 @@ class IngestionPipeline:
         total_vectors = 0
         ingestion_profile = self._ingestion_profile()
 
+        SUPPORTED_EXTENSIONS = {".pdf", ".txt", ".md"}
+        SKIP_FILENAMES = {"README.md", "README.txt"}
+
         for year_dir in academic_year_dirs:
-            academic_year = year_dir.name  # e.g. "2026-2027" or "2025-2026"
-            files = [f for f in year_dir.glob("*") if f.suffix.lower() in [".pdf", ".txt", ".md"] and f.name != "README.md"]
+            academic_year = year_dir.name  # e.g. "2026-2027" or "general"
+
+            # Recursive discovery: find all supported documents at any depth
+            files = [
+                f for f in year_dir.rglob("*")
+                if f.is_file()
+                and f.suffix.lower() in SUPPORTED_EXTENSIONS
+                and f.name not in SKIP_FILENAMES
+            ]
 
             for file_path in files:
                 total_docs += 1
                 checksum = DocumentChunker.compute_file_checksum(file_path)
                 document_id = DocumentChunker.build_document_id(file_path, academic_year)
                 document_type = file_path.suffix.lstrip(".").lower()
+
+                # Derive category from relative path within year_dir.
+                # e.g. year_dir/Rules/doc.pdf → category = "Rules"
+                # e.g. year_dir/doc.pdf → category = "general"
+                relative_parts = file_path.relative_to(year_dir).parts
+                category = relative_parts[0] if len(relative_parts) > 1 else "general"
+
                 previous = await self.document_registry.get_document(file_path, academic_year)
 
                 # Skip unchanged files
@@ -79,7 +103,7 @@ class IngestionPipeline:
                     and previous.status == "processed"
                     and previous_profile == ingestion_profile
                 ):
-                    logger.info(f"Skipping unchanged document: '{file_path.name}' ({academic_year})")
+                    logger.info(f"Skipping unchanged document: '{file_path.name}' ({academic_year}/{category})")
                     skipped_docs += 1
                     continue
 
@@ -92,15 +116,18 @@ class IngestionPipeline:
                             source_path=str(file_path),
                         )
 
-                    # Clean any stale chunks for this path before upsert. This is safe for new files
-                    # and prevents leftovers when a modified document now produces fewer chunks.
+                    # Clean any stale chunks for this path before upsert
                     await self.vector_store.delete_document_vectors(
                         document_id=document_id,
                         academic_year=academic_year,
                         source_path=str(file_path),
                     )
 
-                    chunks = self.chunker.chunk_document(file_path, academic_year=academic_year)
+                    chunks = self.chunker.chunk_document(
+                        file_path,
+                        academic_year=academic_year,
+                        category=category,
+                    )
                     if not chunks:
                         await self.document_registry.mark_failed(
                             document_id=document_id,
@@ -136,6 +163,7 @@ class IngestionPipeline:
                         vectors_count=upsert_count,
                         metadata={
                             "source_path": str(file_path),
+                            "category": category,
                             "file_size_bytes": file_path.stat().st_size,
                             "ingestion_profile": ingestion_profile,
                         },
@@ -144,6 +172,9 @@ class IngestionPipeline:
                     processed_docs += 1
                     total_chunks += len(chunks)
                     total_vectors += upsert_count
+                    logger.info(
+                        f"Ingested '{file_path.name}' ({academic_year}/{category}): {len(chunks)} chunks."
+                    )
                 except Exception as e:
                     logger.error("Error ingesting document '%s' (%s).", file_path.name, type(e).__name__)
                     await self.document_registry.mark_failed(

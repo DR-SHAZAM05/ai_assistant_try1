@@ -16,6 +16,8 @@ class RAGChunkSchema(BaseModel):
     text: str
     checksum: str
     document_type: str = "txt"  # "pdf", "txt", "md"
+    category: str = "general"  # KB sub-category e.g. "rules", "answers", "general"
+    user_id: Optional[str] = None  # None = global/public document; set = user-private
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
