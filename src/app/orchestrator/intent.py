@@ -8,6 +8,10 @@ class IntentType(str, Enum):
     GENERAL_QUERY = "general_query"
     CALENDAR_QUERY = "calendar_query"
     CALENDAR_ADD_EVENT = "calendar_add_event"
+    CALENDAR_UPDATE_EVENT = "calendar_update_event"
+    CALENDAR_DELETE_EVENT = "calendar_delete_event"
+    CALENDAR_CONFIRM_ACTION = "calendar_confirm_action"
+    CALENDAR_CANCEL_ACTION = "calendar_cancel_action"
     
     # Email Intents (M2)
     EMAIL_QUERY = "email_query"

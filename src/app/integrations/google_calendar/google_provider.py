@@ -75,6 +75,29 @@ class GoogleCalendarProvider(CalendarProvider):
         except Exception as exc:
             raise IntegrationException(f"Google Calendar event deletion failed: {exc}") from exc
 
+    async def update_event(
+        self,
+        event_id: str,
+        updates: dict,
+    ) -> dict:
+        """Update an existing Google Calendar event.
+        `updates` should be a dict of fields compatible with Google Calendar API.
+        Returns the updated event as a plain dict.
+        """
+        async def operation() -> dict:
+            service = await self._get_service()
+            updated = await asyncio.to_thread(
+                lambda: service.events()
+                .patch(calendarId=self.calendar_id, eventId=event_id, body=updates)
+                .execute()
+            )
+            return self._to_schema(updated).dict()
+
+        try:
+            return await retry_async(operation, operation_name="google_calendar_update")
+        except Exception as exc:
+            raise IntegrationException(f"Google Calendar event update failed: {exc}") from exc
+
     async def _get_service(self) -> Any:
         if self._service is None:
             self._service = await asyncio.to_thread(self._service_builder)

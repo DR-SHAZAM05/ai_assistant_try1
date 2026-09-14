@@ -13,6 +13,7 @@ Asistent AI modular dezvoltat pentru mediul academic (studenți și cadre didact
 - **Modul dedicat pentru practica UNITBV**: Identificare automată a mesajelor referitoare la practică (convenții, caiete, adeverințe, colocviu, Erasmus) și salvarea rezumatelor în istoricul deciziilor.
 - **Knowledge Base & RAG multi-anual**: Căutare semantică în regulamente și ghiduri organizate pe ani universitari (2024-2025, 2025-2026, 2026-2027) și într-o secțiune generală stabilă pentru regulamente permanente.
 - **Integrare Google Calendar**: Consultare orar, identificare eveniment următor, verificare intervale orare libere/ocupate și programare evenimente prin Google Calendar API v3.
+- **Calendar – Human-in-the-Loop**: Creare, modificare și ștergere de evenimente cu ciclu complet: cerere → preview → confirmare/anulare → executare → audit.
 - **Agregator de știri tehnologice**: Preluare surse RSS definite în `config/news.yaml`, deduplicare articole și calcul al scorului de relevanță pentru topicuri IT și AI.
 - **Human-in-the-Loop**: Confirmare obligatorie a utilizatorului din Telegram înainte de trimiterea oricărui e-mail sau modificare în calendar.
 - **Provider LLM hibrid**: Execuție primară prin cloud (Gemini / OpenAI), cu comutare automată pe runtime-ul local Ollama (`qwen2.5:1.5b`) în caz de erori de conexiune sau depășire a cotelor de utilizare.
@@ -205,6 +206,39 @@ Endpoint-uri utile:
 - Verificare Readiness: `http://localhost:8000/health/ready`
 - Audit dependințe: `http://localhost:8000/health/dependencies`
 - Panou n8n: `http://localhost:5678`
+
+---
+
+## Calendar – Human-in-the-Loop
+
+Fluxul obligatoriu pentru orice operație de creare, modificare sau ștergere a evenimentelor din calendar:
+
+```
+Request
+  ↓
+Pending Action (BD)
+  ↓
+Preview (Utilizator)
+  ↓
+Confirmă / Anulează
+  ↓
+Provider (dacă confirmat)
+  ↓
+Audit
+```
+
+**Butoane Telegram**:
+```
+Confirmă
+Anulează
+```
+
+**Caracteristici de securitate**:
+- User isolation: utilizatorul nu poate confirma/anula acțiunile altor utilizatori
+- Double-confirm protection: aceeași acțiune nu poate fi executată de două ori
+- TTL: acțiunile expiră după 15 minute (configurable: `CALENDAR_ACTION_TTL_SECONDS`)
+- Audit sanitisation: redactare automată a e-mailurilor, numerelor de telefon, tokenurilor din audit
+- Timezone awareness: `Europe/Bucharest` pentru date relative (azi, mâine, săptămâna viitoare)
 
 ---
 

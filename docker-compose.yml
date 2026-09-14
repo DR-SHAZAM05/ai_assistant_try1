@@ -127,6 +127,7 @@ services:
       - "${OLLAMA_BIND_ADDRESS:-127.0.0.1}:${OLLAMA_PORT:-11435}:11434"
     environment:
       - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_DEBUG=1
     volumes:
       - ollama_storage:/root/.ollama
     healthcheck:
@@ -142,11 +143,77 @@ services:
   ollama-init:
     image: ollama/ollama:0.33.1@sha256:075246f72d4109385b4a01c3ac8e9cbd26a0bcb21cd7aa30edbccd24e1b3180c
     restart: "no"
-    entrypoint: ["/bin/sh", "-ec"]
+    entrypoint: ["/bin/bash", "-ec"]
     command:
       - |
-        ollama pull "$${OLLAMA_INIT_CHAT_MODEL}"
-        ollama pull "$${OLLAMA_INIT_EMBEDDING_MODEL}"
+        echo "=== ollama-init starting ==="
+        echo "Target Ollama host: $$OLLAMA_HOST"
+
+        # Wait until Ollama TCP port is accepting connections.
+        # (curl/wget are not available in this image; bash /dev/tcp is built-in)
+        echo "Waiting for Ollama TCP port 11434 ..."
+        max_api_wait=120
+        api_elapsed=0
+        until bash -c 'echo > /dev/tcp/ollama/11434' 2>/dev/null; do
+          if [ $$api_elapsed -ge $$max_api_wait ]; then
+            echo "ERROR: Ollama TCP port did not open within $${max_api_wait}s. Aborting."
+            exit 1
+          fi
+          sleep 3
+          api_elapsed=$$((api_elapsed + 3))
+        done
+        # Give Ollama a moment to finish initialising after port opens
+        sleep 2
+        echo "Ollama API is ready (waited $${api_elapsed}s)."
+
+        model_exists() {
+          local model="$$1"
+          # Primary check: ollama show (authoritative)
+          if ollama show "$$model" >/dev/null 2>&1; then
+            return 0
+          fi
+          # Fallback: scan tags list (skip header line)
+          if ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -qF "$$model"; then
+            return 0
+          fi
+          return 1
+        }
+
+        pull_model() {
+          local model="$$1"
+          if [ -z "$$model" ]; then
+            return 0
+          fi
+          if model_exists "$$model"; then
+            echo "Model '$$model' already present locally. Skipping pull."
+            return 0
+          fi
+          echo "Model '$$model' not found. Starting pull..."
+          local max_attempts=10
+          local attempt=1
+          local delay=10
+          while [ $$attempt -le $$max_attempts ]; do
+            echo "Pulling '$$model' (attempt $$attempt/$${max_attempts}, retry delay $${delay}s)..."
+            pull_out=$$(ollama pull "$$model" 2>&1)
+            pull_rc=$$?
+            if [ $$pull_rc -eq 0 ]; then
+              echo "Successfully pulled '$$model'."
+              return 0
+            fi
+            printf '%s\n' "$$pull_out" | tail -5
+            echo "Pull failed (exit $$pull_rc) on attempt $$attempt. Retrying in $${delay}s..."
+            sleep $$delay
+            delay=$$((delay * 2))
+            [ $$delay -gt 120 ] && delay=120
+            attempt=$$((attempt + 1))
+          done
+          echo "ERROR: Failed to pull '$$model' after $${max_attempts} attempts."
+          return 1
+        }
+
+        pull_model "$$OLLAMA_INIT_CHAT_MODEL"
+        pull_model "$$OLLAMA_INIT_EMBEDDING_MODEL"
+        echo "=== Ollama model initialization finished successfully. ==="
     environment:
       OLLAMA_HOST: http://ollama:11434
       OLLAMA_INIT_CHAT_MODEL: ${OLLAMA_INIT_CHAT_MODEL:-qwen2.5:1.5b}

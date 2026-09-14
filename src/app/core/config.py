@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     EMAIL_SMTP_SERVER: Optional[str] = None
     EMAIL_SMTP_PORT: int = 587
     EMAIL_SMTP_USE_STARTTLS: bool = True
-    UNITBV_EMAIL_PROVIDER: str = "imap"
+    UNITBV_EMAIL_PROVIDER: str = "graph"
     UNITBV_EMAIL_ACCOUNT: Optional[str] = None
     UNITBV_EMAIL_PASSWORD: Optional[str] = None
     UNITBV_EMAIL_IMAP_SERVER: Optional[str] = "outlook.office365.com"
@@ -103,6 +103,22 @@ class Settings(BaseSettings):
     UNITBV_EMAIL_SMTP_SERVER: Optional[str] = "smtp.office365.com"
     UNITBV_EMAIL_SMTP_PORT: int = 587
     UNITBV_EMAIL_SMTP_USE_STARTTLS: bool = True
+
+    # Microsoft 365 / Microsoft Graph API for UNITBV
+    MICROSOFT_GRAPH_ENDPOINT: str = "https://graph.microsoft.com/v1.0"
+    MICROSOFT_TENANT_ID: Optional[str] = None
+    MICROSOFT_CLIENT_ID: Optional[str] = None
+    MICROSOFT_CLIENT_SECRET: Optional[str] = None
+    MICROSOFT_SCOPES: str = "https://graph.microsoft.com/.default"
+    MICROSOFT_MAILBOX_ADDRESS: Optional[str] = None
+    MICROSOFT_ACCESS_TOKEN: Optional[str] = None
+
+    # UNITBV Microsoft Graph (Cross-Tenant OAuth2 with Delegated Access)
+    UNITBV_MICROSOFT_TENANT_ID: Optional[str] = None  # 1211f716-5b0b-4bfe-b7c9-8e0045b37e3e
+    UNITBV_MICROSOFT_REDIRECT_URI: Optional[str] = None  # http://localhost:8000/api/v1/auth/unitbv/callback
+    UNITBV_MICROSOFT_SCOPES: str = "Mail.Read offline_access"
+    UNITBV_MICROSOFT_ACCESS_TOKEN: Optional[str] = None  # Set after first authorization
+    UNITBV_MICROSOFT_REFRESH_TOKEN: Optional[str] = None  # Set after first authorization
 
     # Google Calendar
     CALENDAR_PROVIDER: str = "google"
@@ -131,6 +147,7 @@ class Settings(BaseSettings):
     REQUIRE_HUMAN_APPROVAL_FOR_EMAILS: bool = True
     REQUIRE_HUMAN_APPROVAL_FOR_CALENDAR_MODS: bool = True
     DRAFT_APPROVAL_TTL_SECONDS: int = 900
+    CALENDAR_ACTION_TTL_SECONDS: int = 900
 
     # Hardening / Observability
     EXTERNAL_RETRY_ATTEMPTS: int = 2
@@ -233,11 +250,6 @@ class Settings(BaseSettings):
                 pass
         return None
 
-    @property
-    def persistence_fallback_allowed(self) -> bool:
-        """Allow in-memory fallback only in test or development environments."""
-        return self.APP_ENV.lower() in {"test", "testing", "dev", "development"} or self.ALLOW_MOCK_PROVIDERS
-
     def production_validation_errors(self) -> list[str]:
         if not self.is_production:
             return []
@@ -254,6 +266,15 @@ class Settings(BaseSettings):
             errors.append("rate-limit window and request limit must be greater than zero")
         if self.OLLAMA_REQUEST_TIMEOUT_SECONDS <= 0:
             errors.append("OLLAMA_REQUEST_TIMEOUT_SECONDS must be greater than zero")
+        if self.UNITBV_EMAIL_PROVIDER.lower() in {"graph", "microsoft", "office365", "ms_graph"}:
+            has_graph_creds = bool(
+                (self.MICROSOFT_CLIENT_ID and self.MICROSOFT_CLIENT_SECRET and self.MICROSOFT_TENANT_ID)
+                or self.MICROSOFT_ACCESS_TOKEN
+            )
+            if not has_graph_creds:
+                errors.append(
+                    "MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, and MICROSOFT_TENANT_ID must be configured when UNITBV_EMAIL_PROVIDER is graph"
+                )
         if self.TELEGRAM_BOT_TOKEN:
             if not self.has_valid_telegram_bot_token:
                 errors.append("TELEGRAM_BOT_TOKEN must be a valid Bot API token format")

@@ -1,14 +1,21 @@
-from typing import Dict, Any, Optional, List
-from src.app.services.calendar_service import CalendarService
-from src.app.llm.factory import get_llm_provider
-from src.app.core.logging import logger
+"""Calendar Agent - Handles calendar operations with Human-in-the-Loop."""
+
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
+import json
+import re
+
 from src.app.core.config import settings
+from src.app.core.logging import logger
+from src.app.llm.factory import get_llm_provider
+from src.app.services.calendar_service import CalendarService
 
 
 class CalendarAgent:
     """
-    Specialized Calendar Agent. Parses natural language date ranges,
-    formats calendar responses, and schedules new events.
+    Calendar Agent: Parses natural language date ranges, formats calendar responses,
+    and manages event creation/update/deletion with Human-in-the-Loop approval.
     """
 
     def __init__(
@@ -16,208 +23,108 @@ class CalendarAgent:
         calendar_service: Optional[CalendarService] = None,
         llm_provider=None,
     ):
-        self.calendar_service = calendar_service or CalendarService()
+        self.calendar_service = calendar_service
         self.llm = llm_provider or get_llm_provider()
+        self.tz = ZoneInfo(settings.GOOGLE_CALENDAR_TIMEZONE)
 
     async def handle_calendar_query(
         self,
+        user_id: str,
         user_prompt: str,
         history: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
-        """
-        Processes natural language calendar queries (e.g., 'Ce am mâine?', 'Am ceva între 12 și 15?',
-        'Când este următorul eveniment?', 'Și după al doilea?').
-        """
-        import re
-        from datetime import datetime, timezone
-        logger.info("CalendarAgent processing query (query_length=%s).", len(user_prompt))
-        prompt_lower = user_prompt.strip().lower()
+        """Fetch calendar events (read-only query)."""
+        if not self.calendar_service:
+            return {
+                "text": "Calendar service not configured.",
+                "status": "error",
+            }
 
-        # 1. Check conversation history follow-up (Section 18.1: "Și după al doilea?")
-        follow_up_triggers = ["și după al doilea", "si dupa al doilea", "după al doilea", "dupa al doilea", "după al 2-lea", "dupa al 2-lea", "după a doua", "dupa a doua"]
-        if any(trig in prompt_lower for trig in follow_up_triggers) and history:
-            for prev_msg in reversed(history):
-                if prev_msg.get("role") == "assistant" or prev_msg.get("sender_role") == "assistant":
-                    content = prev_msg.get("content", "")
-                    event_matches = re.findall(r'(?:•\s*)?(\d{1,2}:\d{2})\s*(?:–|-|\ba\b)\s*(\d{1,2}:\d{2})?:?\s*([^•\n]+)?', content)
-                    if len(event_matches) >= 2:
-                        second_evt_end = event_matches[1][1] or event_matches[1][0]
-                        second_evt_title = event_matches[1][2].strip() if event_matches[1][2] else "al doilea eveniment"
-                        if len(event_matches) > 2:
-                            third_evt_start = event_matches[2][0]
-                            third_evt_title = event_matches[2][2].strip() if event_matches[2][2] else "următorul eveniment"
-                            ans_text = f"📅 După al doilea eveniment ({second_evt_title}, ora {second_evt_end}), ai programat **{third_evt_title}** la ora **{third_evt_start}**."
-                        else:
-                            ans_text = f"📅 După al doilea eveniment (ora {second_evt_end}) nu mai ai nimic programat în calendar pentru acea zi."
-                        return {
-                            "text": ans_text,
-                            "count": len(event_matches),
-                            "label": "follow_up"
-                        }
+        prompt_lower = user_prompt.lower()
 
         try:
-            data = await self.calendar_service.get_events(user_prompt)
-        except Exception as exc:
-            logger.warning("Calendar service unavailable (%s): %s", type(exc).__name__, exc)
-            err_str = str(exc).lower()
-            if "not been used in project" in err_str or "accessnotconfigured" in err_str or "disabled" in err_str:
-                msg = (
-                    "📅 **Google Calendar API nu este activat în Google Cloud Console.**\n\n"
-                    "Activează API-ul dând click pe linkul din Google Cloud Console:\n"
-                    "👉 https://console.developers.google.com/apis/api/calendar-json.googleapis.com/overview\n\n"
-                    "Apasă butonul albastru **ENABLE (Activează)**, iar apoi reîntreabă-mă despre programul tău!"
-                )
-            elif "not found" in err_str or "does not have access" in err_str or "404" in err_str:
-                sa_email = settings.google_service_account_email or "adresa de e-mail a Service Account-ului Google"
-                msg = (
-                    "📅 **Calendarul tău nu a fost încă partajat cu asistentul AI.**\n\n"
-                    "Pentru a-mi permite să-ți citesc orarul:\n"
-                    "1. Deschide Google Calendar în browser (https://calendar.google.com)\n"
-                    "2. În stânga, dă click pe cele 3 puncte de lângă calendarul tău -> **Settings and sharing**\n"
-                    "3. La secțiunea **Share with specific people**, apasă **Add people** și adaugă:\n"
-                    f"`{sa_email}`\n"
-                    "4. Setează permisiunea: *'See all event details'*."
-                )
-            else:
-                msg = (
-                    f"📅 **Google Calendar nu este disponibil momentan.**\n\n"
-                    f"Detalii: `{exc}`"
-                )
-            return {
-                "text": msg,
-                "count": 0,
-                "label": "calendar"
-            }
-        
-        events = data["events"]
-        label = data["label"]
+            # Parse relative dates
+            now = datetime.now(self.tz)
+            start_date, end_date, label = self._parse_date_range(user_prompt, now)
 
-        # Check next event query
-        if data.get("is_next_event"):
-            now = datetime.now(timezone.utc)
-            future_events = [e for e in events if (getattr(e.start_time, "tzinfo", None) and e.start_time >= now) or (not getattr(e.start_time, "tzinfo", None) and e.start_time >= now.replace(tzinfo=None))]
-            if not future_events:
+            events = await self.calendar_service.fetch_events(
+                user_id=user_id,
+                start_date=start_date,
+                end_date=end_date,
+                query=None,
+            )
+
+            if not events:
                 return {
-                    "text": "📅 Nu ai niciun eveniment viitor programat în calendar pentru următoarele două săptămâni.",
+                    "text": f"📅 Nu ai evenimente programate pentru {label}.",
                     "count": 0,
-                    "label": "următorul eveniment"
+                    "label": label,
                 }
-            next_evt = future_events[0]
-            start_str = next_evt.start_time.strftime("%d.%m.%Y la ora %H:%M")
-            start_tz = next_evt.start_time if getattr(next_evt.start_time, "tzinfo", None) else next_evt.start_time.replace(tzinfo=timezone.utc)
-            delta_mins = int((start_tz - now).total_seconds() / 60)
-            if delta_mins < 60:
-                time_left_str = f"în aproximativ {max(delta_mins, 1)} minute"
-            elif delta_mins < 1440:
-                time_left_str = f"peste {delta_mins // 60} ore"
-            else:
-                time_left_str = f"peste {delta_mins // 1440} zile"
 
-            loc_str = f"\n📍 Locație: `{next_evt.location}`" if next_evt.location else ""
-            desc_str = f"\n_{next_evt.description}_" if next_evt.description else ""
-            return {
-                "text": (
-                    f"⏰ **Următorul tău eveniment din calendar:**\n\n"
-                    f"• **{next_evt.summary}**\n"
-                    f"• Dată și oră: **{start_str}** ({time_left_str})"
-                    f"{loc_str}{desc_str}"
-                ),
-                "count": 1,
-                "label": "următorul eveniment"
-            }
+            lines = [f"📅 **Programul tău pentru {label}**:\n"]
+            for evt in events:
+                start_str = evt.start_time.strftime("%H:%M")
+                end_str = evt.end_time.strftime("%H:%M")
+                loc_str = f" 📍 {evt.location}" if evt.location else ""
+                lines.append(f"• {start_str} – {end_str}: {evt.summary}{loc_str}")
+                if evt.description:
+                    lines.append(f"   {evt.description}")
 
-        # Check hourly interval query ("Am ceva între 12 și 15?")
-        if data.get("is_hourly_interval"):
-            int_start = data["start_time"]
-            int_end = data["end_time"]
-            overlapping = [
-                e for e in events
-                if (e.start_time < int_end and e.end_time > int_start)
-            ]
-            if not overlapping:
-                return {
-                    "text": f"🟢 **Ești complet liber în {label}!** Nu ai niciun eveniment programat în acest interval orar.",
-                    "count": 0,
-                    "label": label
-                }
-            lines = [f"🟡 **În {label} ai {len(overlapping)} eveniment(e) programat(e):**\n"]
-            for evt in overlapping:
-                s_str = evt.start_time.strftime("%H:%M")
-                e_str = evt.end_time.strftime("%H:%M")
-                loc = f" 📍 `{evt.location}`" if evt.location else ""
-                lines.append(f"• **{s_str} – {e_str}**: {evt.summary}{loc}")
             return {
                 "text": "\n".join(lines),
-                "count": len(overlapping),
-                "label": label
+                "count": len(events),
+                "label": label,
             }
 
-        if not events:
+        except Exception as exc:
+            logger.error(f"[CalendarAgent] calendar query failed: {exc}")
             return {
-                "text": f"📅 **Nu ai evenimente programate pentru {label}.**",
-                "count": 0,
-                "label": label
+                "text": f"⚠️ Nu am putut citi calendarul. Detalii: {exc}",
+                "status": "error",
             }
-
-        lines = [f"📅 **Programul tău pentru {label}**:\n"]
-        for evt in events:
-            start_str = evt.start_time.strftime("%H:%M")
-            end_str = evt.end_time.strftime("%H:%M")
-            loc_str = f" 📍 `{evt.location}`" if evt.location else ""
-            lines.append(f"• **{start_str} – {end_str}**: {evt.summary}{loc_str}")
-            if evt.description:
-                lines.append(f"   _{evt.description}_")
-
-        # Check for conflicts
-        conflicts = await self.calendar_service.detect_conflicts(events)
-        if conflicts:
-            lines.append("\n⚠️ **Suprapuneri detectate în calendar!**")
-
-        return {
-            "text": "\n".join(lines),
-            "count": len(events),
-            "label": label,
-        }
 
     async def handle_create_event_query(
         self,
+        user_id: str,
         user_prompt: str,
     ) -> Dict[str, Any]:
-        """Parses and creates a calendar event from natural language."""
-        import json
-        from datetime import datetime, timezone
-        from zoneinfo import ZoneInfo
-
-        logger.info("CalendarAgent creating event from prompt (query_length=%s).", len(user_prompt))
-
-        try:
-            tz = ZoneInfo("Europe/Bucharest")
-        except Exception:
-            tz = timezone.utc
-        now = datetime.now(tz)
-
-        system_prompt = (
-            f"Ești un asistent universitar care extrage detaliile unui nou eveniment de calendar din mesajul utilizatorului.\n"
-            f"Data și ora curentă de referință (Europe/Bucharest): {now.strftime('%Y-%m-%d %H:%M')}.\n"
-            f"Răspunde EXCLUSIV cu un bloc JSON valid (fără alte explicații sau text) cu cheile:\n"
-            f'{{\n'
-            f'  "summary": "Titlul clar al evenimentului",\n'
-            f'  "start_time": "YYYY-MM-DDTHH:MM:SS",\n'
-            f'  "end_time": "YYYY-MM-DDTHH:MM:SS",\n'
-            f'  "location": "Locație sau null",\n'
-            f'  "description": "Descriere sau null"\n'
-            f'}}\n'
-            f"Dacă utilizatorul nu menționează ora de sfârșit, seteaz-o la 1 oră după start_time."
-        )
+        """
+        Parse and request calendar event creation (HiTL - creates pending action).
+        Returns (action_id, preview_text).
+        """
+        if not self.calendar_service:
+            return {
+                "text": "Calendar service not configured.",
+                "status": "error",
+            }
 
         try:
+            now = datetime.now(self.tz)
+
+            # Use LLM to parse event details
+            system_prompt = (
+                f"Ești asistent universitar. Extrage detaliile unui eveniment de calendar.\n"
+                f"Data curentă: {now.strftime('%Y-%m-%d %H:%M')} (Europe/Bucharest).\n"
+                f"Răspunde EXCLUSIV cu JSON valid (fără text suplimentar):\n"
+                f'{{\n'
+                f'  "summary": "Titlul evenimentului",\n'
+                f'  "start_time": "YYYY-MM-DDTHH:MM:SS",\n'
+                f'  "end_time": "YYYY-MM-DDTHH:MM:SS",\n'
+                f'  "location": "Locație sau null",\n'
+                f'  "description": "Descriere sau null"\n'
+                f'}}\n'
+                f"Dacă ora de sfârșit nu e menționată, seteaz-o la 1 oră după start."
+            )
+
             llm_response = await self.llm.generate_completion(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 temperature=0.1,
             )
+
             clean_json = llm_response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
             event_data = json.loads(clean_json)
+
             summary = event_data.get("summary") or "Eveniment nou"
             start_dt = datetime.fromisoformat(event_data["start_time"])
             end_dt = datetime.fromisoformat(event_data["end_time"])
@@ -225,39 +132,283 @@ class CalendarAgent:
             description = event_data.get("description")
 
             if start_dt.tzinfo is None:
-                start_dt = start_dt.replace(tzinfo=tz)
+                start_dt = start_dt.replace(tzinfo=self.tz)
             if end_dt.tzinfo is None:
-                end_dt = end_dt.replace(tzinfo=tz)
+                end_dt = end_dt.replace(tzinfo=self.tz)
 
-            created_event = await self.calendar_service.create_event(
+            # Request (HiTL)
+            action_id, preview = await self.calendar_service.request_create(
+                user_id=user_id,
                 summary=summary,
-                start_time=start_dt,
-                end_time=end_dt,
                 description=description,
                 location=location,
+                start_time=start_dt,
+                end_time=end_dt,
             )
 
-            start_fmt = start_dt.strftime("%d.%m.%Y de la %H:%M")
-            end_fmt = end_dt.strftime("%H:%M")
-            loc_fmt = f"\n📍 **Locație**: `{location}`" if location else ""
-            desc_fmt = f"\n📝 **Descriere**: _{description}_" if description else ""
-
-            ans = (
-                f"✅ **Eveniment programat cu succes în Google Calendar!**\n\n"
-                f"📌 **Titlu**: **{created_event.summary}**\n"
-                f"🕒 **Când**: {start_fmt} până la {end_fmt}"
-                f"{loc_fmt}{desc_fmt}\n\n"
-                f"💡 *Evenimentul este sincronizat direct pe contul tău Google.*"
-            )
             return {
-                "text": ans,
-                "event_id": created_event.id,
-                "status": "success",
+                "status": "pending",
+                "action_id": action_id,
+                "preview": preview,
             }
+
         except Exception as exc:
-            logger.error("Failed to create calendar event from prompt: %s", exc)
+            logger.error(f"[CalendarAgent] create_event_query failed: {exc}")
             return {
-                "text": f"⚠️ Nu am putut programa evenimentul în calendar.\nDetalii: `{exc}`",
+                "text": f"⚠️ Nu am putut procesa cererea. Detalii: {exc}",
                 "status": "error",
             }
 
+    async def handle_update_event_query(
+        self,
+        user_id: str,
+        user_prompt: str,
+    ) -> Dict[str, Any]:
+        """
+        Request calendar event update (HiTL - creates pending action).
+        Ambiguity handling: requires clarification if 0 or >1 results.
+        """
+        if not self.calendar_service:
+            return {
+                "text": "Calendar service not configured.",
+                "status": "error",
+            }
+
+        try:
+            # Parse update details from prompt
+            # Example: "Modifică ședința de proiect la 15:00"
+            system_prompt = (
+                f"Ești asistent universitar. Din mesajul utilizatorului, extrage:\n"
+                f"1. Event query string (keyword pentru a găsi evenimentul)\n"
+                f"2. Updates dict cu câmpurile de modificat\n"
+                f"Răspunde EXCLUSIV cu JSON valid:\n"
+                f'{{\n'
+                f'  "event_query": "Cuvântul cheie pentru a găsi evenimentul",\n'
+                f'  "updates": {{\n'
+                f'    "summary": "Titlu nou sau null",\n'
+                f'    "start_time": "YYYY-MM-DDTHH:MM:SS sau null",\n'
+                f'    "location": "Locație nouă sau null"\n'
+                f'  }}\n'
+                f'}}\n'
+            )
+
+            llm_response = await self.llm.generate_completion(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=0.1,
+            )
+
+            clean_json = llm_response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            parsed = json.loads(clean_json)
+
+            event_query = parsed.get("event_query", "").strip()
+            updates_raw = parsed.get("updates", {})
+            updates = {k: v for k, v in updates_raw.items() if v is not None}
+
+            if not event_query:
+                return {
+                    "text": "Te rog specifică care eveniment dorești să modifici.",
+                    "status": "error",
+                }
+
+            if not updates:
+                return {
+                    "text": "Te rog specifică ce dorești să modifici în eveniment.",
+                    "status": "error",
+                }
+
+            # Request (HiTL) - ambiguity handling inside
+            action_id, preview = await self.calendar_service.request_update(
+                user_id=user_id,
+                event_query=event_query,
+                updates=updates,
+            )
+
+            return {
+                "status": "pending",
+                "action_id": action_id,
+                "preview": preview,
+            }
+
+        except ValueError as exc:
+            # Ambiguity or not found
+            return {
+                "text": str(exc),
+                "status": "clarification_needed",
+            }
+        except Exception as exc:
+            logger.error(f"[CalendarAgent] update_event_query failed: {exc}")
+            return {
+                "text": f"⚠️ Nu am putut procesa cererea. Detalii: {exc}",
+                "status": "error",
+            }
+
+    async def handle_delete_event_query(
+        self,
+        user_id: str,
+        user_prompt: str,
+    ) -> Dict[str, Any]:
+        """
+        Request calendar event deletion (HiTL - creates pending action).
+        Ambiguity handling: requires clarification if 0 or >1 results.
+        """
+        if not self.calendar_service:
+            return {
+                "text": "Calendar service not configured.",
+                "status": "error",
+            }
+
+        try:
+            # Extract event query keyword
+            system_prompt = (
+                f"Ești asistent universitar. Din mesajul utilizatorului, extrage cuvântul cheie "
+                f"pentru a identifica evenimentul de șters.\n"
+                f"Răspunde EXCLUSIV cu JSON valid:\n"
+                f'{{\n'
+                f'  "event_query": "Cuvântul cheie pentru a găsi evenimentul"\n'
+                f'}}\n'
+            )
+
+            llm_response = await self.llm.generate_completion(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=0.1,
+            )
+
+            clean_json = llm_response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            parsed = json.loads(clean_json)
+
+            event_query = parsed.get("event_query", "").strip()
+            if not event_query:
+                return {
+                    "text": "Te rog specifică care eveniment dorești să ștergi.",
+                    "status": "error",
+                }
+
+            # Request (HiTL) - ambiguity handling inside
+            action_id, preview = await self.calendar_service.request_delete(
+                user_id=user_id,
+                event_query=event_query,
+            )
+
+            return {
+                "status": "pending",
+                "action_id": action_id,
+                "preview": preview,
+            }
+
+        except ValueError as exc:
+            # Ambiguity or not found
+            return {
+                "text": str(exc),
+                "status": "clarification_needed",
+            }
+        except Exception as exc:
+            logger.error(f"[CalendarAgent] delete_event_query failed: {exc}")
+            return {
+                "text": f"⚠️ Nu am putut procesa cererea. Detalii: {exc}",
+                "status": "error",
+            }
+
+    async def handle_confirm_action(
+        self,
+        user_id: str,
+        action_id: str,
+    ) -> Dict[str, Any]:
+        """Confirm a pending calendar action."""
+        if not self.calendar_service:
+            return {
+                "text": "Calendar service not configured.",
+                "status": "error",
+            }
+
+        try:
+            result = await self.calendar_service.confirm_action(user_id, action_id)
+            return {
+                "text": f"✅ {result}",
+                "status": "success",
+            }
+        except PermissionError as exc:
+            return {
+                "text": str(exc),
+                "status": "permission_error",
+            }
+        except ValueError as exc:
+            return {
+                "text": str(exc),
+                "status": "error",
+            }
+        except Exception as exc:
+            logger.error(f"[CalendarAgent] confirm_action failed: {exc}")
+            return {
+                "text": f"⚠️ Eroare: {exc}",
+                "status": "error",
+            }
+
+    async def handle_cancel_action(
+        self,
+        user_id: str,
+        action_id: str,
+    ) -> Dict[str, Any]:
+        """Cancel a pending calendar action."""
+        if not self.calendar_service:
+            return {
+                "text": "Calendar service not configured.",
+                "status": "error",
+            }
+
+        try:
+            result = await self.calendar_service.cancel_action(user_id, action_id)
+            return {
+                "text": f"✅ {result}",
+                "status": "success",
+            }
+        except PermissionError as exc:
+            return {
+                "text": str(exc),
+                "status": "permission_error",
+            }
+        except ValueError as exc:
+            return {
+                "text": str(exc),
+                "status": "error",
+            }
+        except Exception as exc:
+            logger.error(f"[CalendarAgent] cancel_action failed: {exc}")
+            return {
+                "text": f"⚠️ Eroare: {exc}",
+                "status": "error",
+            }
+
+    def _parse_date_range(
+        self,
+        user_prompt: str,
+        now: datetime,
+    ) -> tuple[datetime, datetime, str]:
+        """Parse relative date references (azi, mâine, săptămâna viitoare, etc.)."""
+        prompt_lower = user_prompt.lower()
+
+        if any(w in prompt_lower for w in ["azi", "azi"]):
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = start + timedelta(days=1)
+            return start, end, "azi"
+
+        if any(w in prompt_lower for w in ["mâine", "maine", "mâine"]):
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            end = start + timedelta(days=1)
+            return start, end, "mâine"
+
+        if any(w in prompt_lower for w in ["poimâine", "poimaine"]):
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=2)
+            end = start + timedelta(days=1)
+            return start, end, "poimâine"
+
+        if any(w in prompt_lower for w in ["săptămâna viitoare", "saptamana viitoare", "săptămâna aceasta", "saptamana aceasta"]):
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = start + timedelta(days=7)
+            return start, end, "săptămâna viitoare"
+
+        # Default: next 30 days
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=30)
+        return start, end, "următoarele 30 de zile"

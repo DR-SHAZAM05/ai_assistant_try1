@@ -70,6 +70,17 @@ def get_documents_download_keyboard() -> Dict[str, Any]:
             ]
         ]
     }
+def get_calendar_action_keyboard(action_id: str) -> Dict[str, Any]:
+    """Inline keyboard for calendar confirmation/cancellation with Romanian labels."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "Confirmă", "callback_data": f"calendar_confirm:{action_id}"},
+                {"text": "Anulează", "callback_data": f"calendar_cancel:{action_id}"},
+            ]
+        ]
+    }
+
 
 
 class TelegramService:

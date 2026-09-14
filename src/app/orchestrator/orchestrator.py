@@ -175,6 +175,32 @@ class AIOrchestrator:
                 confidence=1.0,
                 target_agents=["email_agent"]
             )
+        # Calendar inline callback queries
+        if prompt_clean.startswith("calendar_confirm:"):
+            return IntentDetectionResult(
+                intent=IntentType.CALENDAR_CONFIRM_ACTION,
+                confidence=1.0,
+                target_agents=["calendar_agent"]
+            )
+        if prompt_clean.startswith("calendar_cancel:"):
+            return IntentDetectionResult(
+                intent=IntentType.CALENDAR_CANCEL_ACTION,
+                confidence=1.0,
+                target_agents=["calendar_agent"]
+            )
+        # Calendar inline callback queries
+        if prompt_clean.startswith("calendar_confirm:"):
+            return IntentDetectionResult(
+                intent=IntentType.CALENDAR_CONFIRM_ACTION,
+                confidence=1.0,
+                target_agents=["calendar_agent"]
+            )
+        if prompt_clean.startswith("calendar_cancel:"):
+            return IntentDetectionResult(
+                intent=IntentType.CALENDAR_CANCEL_ACTION,
+                confidence=1.0,
+                target_agents=["calendar_agent"]
+            )
         if prompt_clean.startswith("complete_task:"):
             return IntentDetectionResult(
                 intent=IntentType.TASKS_QUERY,
@@ -218,7 +244,23 @@ class AIOrchestrator:
                 target_agents=["calendar_agent"]
             )
 
-        # 2. Practice Document Generation / Download (Convenție cadru, Caiet de practică DOCX)
+        # Calendar Update / Delete verbs
+        cal_update_verbs = ["actualizează eveniment", "actualizeaza eveniment", "modifică eveniment", "modifica eveniment", "update eveniment", "update event"]
+        if any(v in prompt_clean for v in cal_update_verbs):
+            return IntentDetectionResult(
+                intent=IntentType.CALENDAR_UPDATE_EVENT,
+                confidence=0.95,
+                target_agents=["calendar_agent"]
+            )
+        cal_delete_verbs = ["șterge eveniment", "sterge eveniment", "delete event", "remove event"]
+        if any(v in prompt_clean for v in cal_delete_verbs):
+            return IntentDetectionResult(
+                intent=IntentType.CALENDAR_DELETE_EVENT,
+                confidence=0.95,
+                target_agents=["calendar_agent"]
+            )
+
+            # 2. Practice Document Generation / Download (Convenție cadru, Caiet de practică DOCX)
         doc_gen_verbs = [
             "generează", "genereaza", "descarcă", "descarca", "creează", "creeaza",
             "fă-mi", "fa-mi", "descarc", "vreau", "dă-mi", "da-mi", "trimite-mi", "exportă", "exporta"

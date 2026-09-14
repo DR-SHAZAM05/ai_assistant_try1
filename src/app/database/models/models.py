@@ -75,6 +75,21 @@ class Email(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class PendingCalendarAction(Base):
+    __tablename__ = "pending_calendar_actions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    action_id = Column(String(64), unique=True, index=True, nullable=False)
+    owner_id = Column(String(64), index=True, nullable=False)
+    action_type = Column(String(32), nullable=False)  # e.g., create, update, delete
+    payload = Column(JSON, nullable=False)  # raw data needed for the action
+    preview_text = Column(Text, nullable=False)  # markdown preview shown to user
+    status = Column(String(32), index=True, nullable=False, default="pending_approval")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    decided_at = Column(DateTime, nullable=True)
+
+
 class PendingEmailDraft(Base):
     __tablename__ = "pending_email_drafts"
 

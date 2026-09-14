@@ -38,3 +38,15 @@ class CalendarProvider(ABC):
         Delete an existing calendar event (requires Human-in-the-Loop approval).
         """
         pass
+
+    @abstractmethod
+    async def update_event(
+        self,
+        event_id: str,
+        updates: dict
+    ) -> dict:
+        """
+        Update an existing calendar event with the given fields.
+        Returns the updated event representation.
+        """
+        pass

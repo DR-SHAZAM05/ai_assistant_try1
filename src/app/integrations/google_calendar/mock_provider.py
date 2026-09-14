@@ -105,3 +105,26 @@ class MockCalendarProvider(CalendarProvider):
         initial_len = len(self._storage)
         self._storage = [e for e in self._storage if e.id != event_id]
         return len(self._storage) < initial_len
+
+    async def update_event(
+        self,
+        event_id: str,
+        updates: dict,
+    ) -> dict:
+        """Update an existing mock event and return the updated dict."""
+        for idx, evt in enumerate(self._storage):
+            if evt.id == event_id:
+                for key, value in updates.items():
+                    if hasattr(evt, key):
+                        setattr(evt, key, value)
+                logger.info(f"[MockCalendarProvider] Updated event {event_id}")
+                return {
+                    "id": evt.id,
+                    "summary": evt.summary,
+                    "description": evt.description,
+                    "location": evt.location,
+                    "start_time": evt.start_time,
+                    "end_time": evt.end_time,
+                    "status": evt.status,
+                }
+        raise Exception(f"Event {event_id} not found in mock storage")
