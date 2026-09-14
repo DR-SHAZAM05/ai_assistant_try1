@@ -25,15 +25,8 @@
       "parameters": {
         "method": "POST",
         "url": "http://academic_ai_app:8000/api/v1/automation/daily-briefing",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "X-Automation-Key",
-              "value": "={{ $env.AUTOMATION_API_KEY }}"
-            }
-          ]
-        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "options": {
           "timeout": 60000
         }
@@ -45,7 +38,13 @@
       "position": [
         480,
         300
-      ]
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "63hixaKgI38jNYz5",
+          "name": "Academic AI Automation Header"
+        }
+      }
     }
   ],
   "connections": {

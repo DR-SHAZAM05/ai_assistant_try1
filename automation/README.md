@@ -15,9 +15,9 @@ Acest director conține fluxurile de lucru automate definite pentru motorul de o
 ## 2. Autentificare & Chei Secrete
 Toate endpoint-urile interne de automatizare din `/api/v1/automation/*` sunt protejate criptografic prin header-ul HTTP:
 ```http
-X-Automation-Key: {{ $env.AUTOMATION_API_KEY }}
+X-Automation-Key: <cheia-secreta>
 ```
-Variabila `AUTOMATION_API_KEY` este injectată automat în containerele `academic_ai_app` și `academic_ai_n8n` din fișierul `.env`.
+În n8n, autentificarea este configurată nativ prin stocarea securizată de credențiale n8n (`Header Auth` / `httpHeaderAuth`), având numele `Academic AI Automation Header` și trimițând headerul `X-Automation-Key`. Astfel, secretul este criptat în baza de date n8n și nu este expus în definițiile JSON ale workflow-urilor sau prin apeluri `$env`. Variabila de mediu `AUTOMATION_API_KEY` este injectată în containere din fișierul `.env`.
 
 ---
 
