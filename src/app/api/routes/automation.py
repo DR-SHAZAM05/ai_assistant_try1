@@ -232,7 +232,10 @@ async def daily_morning_briefing(
 
     # 1. Today's Calendar Schedule
     try:
-        cal_res = await CalendarAgent().handle_calendar_query("ce am azi?")
+        cal_res = await CalendarAgent().handle_calendar_query(
+            user_id=owner_id,
+            user_prompt="ce am azi?",
+        )
         cal_text = cal_res.get("text", "")
         briefing_lines.append("📅 **Programul tău de astăzi**:")
         briefing_lines.append(cal_text)
