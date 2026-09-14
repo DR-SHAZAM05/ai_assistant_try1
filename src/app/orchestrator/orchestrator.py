@@ -188,19 +188,6 @@ class AIOrchestrator:
                 confidence=1.0,
                 target_agents=["calendar_agent"]
             )
-        # Calendar inline callback queries
-        if prompt_clean.startswith("calendar_confirm:"):
-            return IntentDetectionResult(
-                intent=IntentType.CALENDAR_CONFIRM_ACTION,
-                confidence=1.0,
-                target_agents=["calendar_agent"]
-            )
-        if prompt_clean.startswith("calendar_cancel:"):
-            return IntentDetectionResult(
-                intent=IntentType.CALENDAR_CANCEL_ACTION,
-                confidence=1.0,
-                target_agents=["calendar_agent"]
-            )
         if prompt_clean.startswith("complete_task:"):
             return IntentDetectionResult(
                 intent=IntentType.TASKS_QUERY,
@@ -613,7 +600,7 @@ class AIOrchestrator:
         # 2. CALENDAR INTENTS EXECUTION
         # -------------------------------------------------------------
         elif intent_result.intent == IntentType.CALENDAR_QUERY:
-            result = await self.calendar_agent.handle_calendar_query(user_prompt=user_prompt, history=history)
+            result = await self.calendar_agent.handle_calendar_query(user_id=uid, user_prompt=user_prompt, history=history)
             response_dict = {
                 "response": result["text"],
                 "intent": intent_result.intent.value,
@@ -622,7 +609,7 @@ class AIOrchestrator:
             }
 
         elif intent_result.intent == IntentType.CALENDAR_ADD_EVENT:
-            result = await self.calendar_agent.handle_create_event_query(user_prompt=user_prompt)
+            result = await self.calendar_agent.handle_create_event_query(user_id=uid, user_prompt=user_prompt)
             response_dict = {
                 "response": result["text"],
                 "intent": intent_result.intent.value,
@@ -810,7 +797,7 @@ class AIOrchestrator:
 
             # 1. Calendar upcoming events
             try:
-                cal_res = await self.calendar_agent.handle_calendar_query("ce evenimente am în perioada următoare?")
+                cal_res = await self.calendar_agent.handle_calendar_query(user_id=uid, user_prompt="ce evenimente am în perioada următoare?")
                 lines.append("📅 **Evenimente în Calendar**:")
                 lines.append(cal_res.get("text", "Nu sunt evenimente programate."))
                 lines.append("")
@@ -898,7 +885,7 @@ class AIOrchestrator:
 
             # Calendar
             try:
-                cal_res = await self.calendar_agent.handle_calendar_query("ce am azi?")
+                cal_res = await self.calendar_agent.handle_calendar_query(user_id=uid, user_prompt="ce am azi?")
                 briefing_lines.append("📅 **Programul tău de astăzi**:")
                 briefing_lines.append(cal_res.get("text", "Niciun eveniment programat pentru astăzi."))
                 briefing_lines.append("")

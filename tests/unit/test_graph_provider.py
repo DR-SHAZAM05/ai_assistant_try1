@@ -293,9 +293,10 @@ async def test_graph_provider_throttling_retry(graph_settings, monkeypatch):
 
 
 def test_factory_returns_graph_provider_when_configured(graph_settings):
-    """Test EmailProviderFactory instantiates MicrosoftGraphEmailProvider when configured."""
+    """Test EmailProviderFactory instantiates UnitbvGraphProvider when configured."""
+    from src.app.integrations.email.unitbv_graph_provider import UnitbvGraphProvider
     provider = get_email_provider("unitbv")
-    assert isinstance(provider, MicrosoftGraphEmailProvider)
+    assert isinstance(provider, UnitbvGraphProvider)
     assert provider.account_type == "unitbv"
 
 
@@ -315,6 +316,7 @@ def test_factory_falls_back_to_mock_in_development_when_unconfigured(monkeypatch
 
 def test_factory_raises_in_production_when_unconfigured(monkeypatch):
     """Test factory raises ConfigurationException in production when Graph credentials missing."""
+    from src.app.integrations.email.unitbv_graph_provider import UnitbvGraphProvider
     monkeypatch.setattr(settings, "UNITBV_EMAIL_PROVIDER", "graph")
     monkeypatch.setattr(settings, "MICROSOFT_CLIENT_ID", None)
     monkeypatch.setattr(settings, "MICROSOFT_CLIENT_SECRET", None)
@@ -323,7 +325,7 @@ def test_factory_raises_in_production_when_unconfigured(monkeypatch):
     monkeypatch.setattr(settings, "APP_ENV", "production")
 
     provider = get_email_provider("unitbv")
-    assert isinstance(provider, MicrosoftGraphEmailProvider)
+    assert isinstance(provider, UnitbvGraphProvider)
     with pytest.raises(ConfigurationException):
         provider._require_configuration()
 

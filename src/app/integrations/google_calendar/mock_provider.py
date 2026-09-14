@@ -4,61 +4,73 @@ from src.app.integrations.google_calendar.base import CalendarProvider
 from src.app.schemas.calendar import CalendarEventSchema, CalendarQueryFilter
 from src.app.core.logging import logger
 
-now = datetime.now(timezone.utc)
-today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-tomorrow_start = today_start + timedelta(days=1)
-next_week_start = today_start + timedelta(days=7)
 
-MOCK_EVENTS: List[CalendarEventSchema] = [
-    # Today events
-    CalendarEventSchema(
-        id="event-today-1",
-        summary="Ședință Departament FIESC UNITBV",
-        description="Discuții despre convențiile de practică și colocviu.",
-        location="Corp V, Sala V102",
-        start_time=today_start + timedelta(hours=10),
-        end_time=today_start + timedelta(hours=11, minutes=30),
-        status="confirmed"
-    ),
-    CalendarEventSchema(
-        id="event-today-2",
-        summary="Consultații Practică Studenți",
-        description="Preluare caiete de practică și adeverințe.",
-        location="Corp N, Sala N204",
-        start_time=today_start + timedelta(hours=14),
-        end_time=today_start + timedelta(hours=16),
-        status="confirmed"
-    ),
-    # Tomorrow events
-    CalendarEventSchema(
-        id="event-tomorrow-1",
-        summary="Curs Inteligență Artificială și Agenți Autonomous",
-        description="Curs introductiv RAG și Arhitecturi de Asistenți AI.",
-        location="Amfiteatrul A3 UNITBV",
-        start_time=tomorrow_start + timedelta(hours=9),
-        end_time=tomorrow_start + timedelta(hours=11),
-        status="confirmed"
-    ),
-    CalendarEventSchema(
-        id="event-tomorrow-2",
-        summary="Laborator Sisteme Embedded & RW612 NXP",
-        description="Laborator practic microcontrollere.",
-        location="Laborator L2 Corp V",
-        start_time=tomorrow_start + timedelta(hours=12),
-        end_time=tomorrow_start + timedelta(hours=14),
-        status="confirmed"
-    ),
-    # Next week events
-    CalendarEventSchema(
-        id="event-nextweek-1",
-        summary="Colocviu Final Practică 2026-2027",
-        description="Prezentare caiete de practică și adeverințe ore efectuate.",
-        location="Sala V101 UNITBV",
-        start_time=next_week_start + timedelta(hours=10),
-        end_time=next_week_start + timedelta(hours=13),
-        status="confirmed"
-    )
-]
+def _build_mock_events() -> List[CalendarEventSchema]:
+    """Build mock events relative to now, always fresh."""
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow_start = today_start + timedelta(days=1)
+    next_week_start = today_start + timedelta(days=7)
+    return [
+        # Today events
+        CalendarEventSchema(
+            id="event-today-1",
+            summary="Ședință Departament FIESC UNITBV",
+            description="Discuții despre convențiile de practică și colocviu.",
+            location="Corp V, Sala V102",
+            start_time=today_start + timedelta(hours=10),
+            end_time=today_start + timedelta(hours=11, minutes=30),
+            status="confirmed"
+        ),
+        CalendarEventSchema(
+            id="event-today-2",
+            summary="Consultații Practică Studenți",
+            description="Preluare caiete de practică și adeverințe.",
+            location="Corp N, Sala N204",
+            start_time=today_start + timedelta(hours=14),
+            end_time=today_start + timedelta(hours=16),
+            status="confirmed"
+        ),
+        # Tomorrow events
+        CalendarEventSchema(
+            id="event-tomorrow-1",
+            summary="Curs Inteligență Artificială și Agenți Autonomous",
+            description="Curs introductiv RAG și Arhitecturi de Asistenți AI.",
+            location="Amfiteatrul A3 UNITBV",
+            start_time=tomorrow_start + timedelta(hours=9),
+            end_time=tomorrow_start + timedelta(hours=11),
+            status="confirmed"
+        ),
+        CalendarEventSchema(
+            id="event-tomorrow-2",
+            summary="Laborator Sisteme Embedded & RW612 NXP",
+            description="Laborator practic microcontrollere.",
+            location="Laborator L2 Corp V",
+            start_time=tomorrow_start + timedelta(hours=12),
+            end_time=tomorrow_start + timedelta(hours=14),
+            status="confirmed"
+        ),
+        # Next week events
+        CalendarEventSchema(
+            id="event-nextweek-1",
+            summary="Colocviu Final Practică 2026-2027",
+            description="Prezentare caiete de practică și adeverințe ore efectuate.",
+            location="Sala V101 UNITBV",
+            start_time=next_week_start + timedelta(hours=10),
+            end_time=next_week_start + timedelta(hours=13),
+            status="confirmed"
+        ),
+        # Second Consultații event – needed for ambiguity test (>1 match for 'Consultații')
+        CalendarEventSchema(
+            id="event-nextweek-2",
+            summary="Consultații Lucrări de Licență",
+            description="Consultații individuale pentru studenții din anul IV.",
+            location="Corp V, Sala V105",
+            start_time=next_week_start + timedelta(hours=14),
+            end_time=next_week_start + timedelta(hours=16),
+            status="confirmed"
+        ),
+    ]
 
 
 class MockCalendarProvider(CalendarProvider):
@@ -67,7 +79,7 @@ class MockCalendarProvider(CalendarProvider):
     """
 
     def __init__(self):
-        self._storage: List[CalendarEventSchema] = list(MOCK_EVENTS)
+        self._storage: List[CalendarEventSchema] = _build_mock_events()
 
     async def fetch_events(
         self,

@@ -26,6 +26,20 @@ class CalendarAgent:
         self.calendar_service = calendar_service
         self.llm = llm_provider or get_llm_provider()
         self.tz = ZoneInfo(settings.GOOGLE_CALENDAR_TIMEZONE)
+        # Fallback read-only provider for handle_calendar_query when no CalendarService is injected
+        self._read_provider = self._build_read_provider()
+
+    def _build_read_provider(self):
+        """Build a read-only CalendarProvider for fetch_events queries without a DB session."""
+        try:
+            provider_name = settings.CALENDAR_PROVIDER.lower()
+            if provider_name == "mock" or settings.mocks_allowed:
+                from src.app.integrations.google_calendar.mock_provider import MockCalendarProvider
+                return MockCalendarProvider()
+            # In production attempt a real provider; failure is non-fatal here
+            return None
+        except Exception:
+            return None
 
     async def handle_calendar_query(
         self,
@@ -34,39 +48,38 @@ class CalendarAgent:
         history: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         """Fetch calendar events (read-only query)."""
-        if not self.calendar_service:
-            return {
-                "text": "Calendar service not configured.",
-                "status": "error",
-            }
-
-        prompt_lower = user_prompt.lower()
-
         try:
-            # Parse relative dates
             now = datetime.now(self.tz)
             start_date, end_date, label = self._parse_date_range(user_prompt, now)
 
-            events = await self.calendar_service.fetch_events(
-                user_id=user_id,
-                start_date=start_date,
-                end_date=end_date,
-                query=None,
-            )
+            # Prefer full CalendarService (has user_id, audit, etc.)
+            if self.calendar_service:
+                events = await self.calendar_service.fetch_events(
+                    user_id=user_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                    query=None,
+                )
+            elif self._read_provider:
+                from src.app.schemas.calendar import CalendarQueryFilter
+                q = CalendarQueryFilter(start_time=start_date, end_time=end_date, max_results=50)
+                events = await self._read_provider.fetch_events(q)
+            else:
+                return {"text": "Calendar service not configured.", "status": "error", "count": 0}
 
             if not events:
                 return {
-                    "text": f"📅 Nu ai evenimente programate pentru {label}.",
+                    "text": f"\U0001f4c5 Nu ai evenimente programate pentru {label}.",
                     "count": 0,
                     "label": label,
                 }
 
-            lines = [f"📅 **Programul tău pentru {label}**:\n"]
+            lines = [f"\U0001f4c5 **Programul t\u0103u pentru {label}**:\n"]
             for evt in events:
                 start_str = evt.start_time.strftime("%H:%M")
                 end_str = evt.end_time.strftime("%H:%M")
-                loc_str = f" 📍 {evt.location}" if evt.location else ""
-                lines.append(f"• {start_str} – {end_str}: {evt.summary}{loc_str}")
+                loc_str = f" \U0001f4cd {evt.location}" if evt.location else ""
+                lines.append(f"\u2022 {start_str} \u2013 {end_str}: {evt.summary}{loc_str}")
                 if evt.description:
                     lines.append(f"   {evt.description}")
 
@@ -79,7 +92,7 @@ class CalendarAgent:
         except Exception as exc:
             logger.error(f"[CalendarAgent] calendar query failed: {exc}")
             return {
-                "text": f"⚠️ Nu am putut citi calendarul. Detalii: {exc}",
+                "text": f"\u26a0\ufe0f Nu am putut citi calendarul. Detalii: {exc}",
                 "status": "error",
             }
 

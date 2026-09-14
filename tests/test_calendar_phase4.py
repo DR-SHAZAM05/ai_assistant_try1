@@ -298,7 +298,7 @@ class TestTTLExpiration:
         """Expired action should not be executable."""
         user_id = "user_123"
         now = datetime.now(ZoneInfo("Europe/Bucharest"))
-        
+
         action_id, _ = await calendar_service.request_create(
             user_id=user_id,
             summary="Event",
@@ -306,10 +306,11 @@ class TestTTLExpiration:
             end_time=now + timedelta(hours=2),
         )
 
-        # Force expiration
+        # Force expiration: must use naive UTC to match TIMESTAMP WITHOUT TIME ZONE schema
+        from datetime import timezone as _tz
         store = PendingCalendarActionStore(db_session)
         action = await store.get(action_id)
-        action.expires_at = now - timedelta(seconds=1)
+        action.expires_at = datetime.now(_tz.utc).replace(tzinfo=None) - timedelta(seconds=1)
         await db_session.flush()
 
         # Try to confirm - should error

@@ -48,7 +48,9 @@ class CalendarService:
     ) -> list[CalendarEventSchema]:
         """Fetch calendar events (no approval needed)."""
         if not start_date:
-            start_date = datetime.now(self.timezone)
+            # Default to start of today so events from earlier today are still findable.
+            now = datetime.now(self.timezone)
+            start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
         if not end_date:
             end_date = start_date + timedelta(days=30)
 
