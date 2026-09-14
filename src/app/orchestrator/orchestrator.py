@@ -18,6 +18,7 @@ from src.app.integrations.telegram.service import (
     get_tasks_action_keyboard,
     get_email_action_keyboard,
     get_documents_download_keyboard,
+    get_calendar_action_keyboard,
 )
 from src.app.core.config import settings
 from src.app.core.logging import logger
@@ -610,11 +611,87 @@ class AIOrchestrator:
 
         elif intent_result.intent == IntentType.CALENDAR_ADD_EVENT:
             result = await self.calendar_agent.handle_create_event_query(user_id=uid, user_prompt=user_prompt)
+            if result.get("status") == "pending":
+                action_id = result["action_id"]
+                preview = result.get("preview", "Eveniment nou")
+                response_dict = {
+                    "response": f"📅 **Confirmi crearea evenimentului?**\n\n{preview}",
+                    "text": f"📅 **Confirmi crearea evenimentului?**\n\n{preview}",
+                    "intent": intent_result.intent.value,
+                    "target_agents": ["calendar_agent"],
+                    "inline_keyboard": get_calendar_action_keyboard(action_id)["inline_keyboard"],
+                    "model_used": settings.DEFAULT_MODEL,
+                }
+            else:
+                response_dict = {
+                    "response": result.get("text", "Nu am putut procesa cererea."),
+                    "intent": intent_result.intent.value,
+                    "target_agents": ["calendar_agent"],
+                    "model_used": settings.DEFAULT_MODEL,
+                }
+
+        elif intent_result.intent == IntentType.CALENDAR_UPDATE_EVENT:
+            result = await self.calendar_agent.handle_update_event_query(user_id=uid, user_prompt=user_prompt)
+            if result.get("status") == "pending":
+                action_id = result["action_id"]
+                preview = result.get("preview", "Modificare eveniment")
+                response_dict = {
+                    "response": f"📝 **Confirmi modificarea evenimentului?**\n\n{preview}",
+                    "text": f"📝 **Confirmi modificarea evenimentului?**\n\n{preview}",
+                    "intent": intent_result.intent.value,
+                    "target_agents": ["calendar_agent"],
+                    "inline_keyboard": get_calendar_action_keyboard(action_id)["inline_keyboard"],
+                    "model_used": settings.DEFAULT_MODEL,
+                }
+            else:
+                response_dict = {
+                    "response": result.get("text", "Nu am putut procesa cererea."),
+                    "intent": intent_result.intent.value,
+                    "target_agents": ["calendar_agent"],
+                    "model_used": settings.DEFAULT_MODEL,
+                }
+
+        elif intent_result.intent == IntentType.CALENDAR_DELETE_EVENT:
+            result = await self.calendar_agent.handle_delete_event_query(user_id=uid, user_prompt=user_prompt)
+            if result.get("status") == "pending":
+                action_id = result["action_id"]
+                preview = result.get("preview", "Ștergere eveniment")
+                response_dict = {
+                    "response": f"🗑️ **Confirmi ștergerea evenimentului?**\n\n{preview}",
+                    "text": f"🗑️ **Confirmi ștergerea evenimentului?**\n\n{preview}",
+                    "intent": intent_result.intent.value,
+                    "target_agents": ["calendar_agent"],
+                    "inline_keyboard": get_calendar_action_keyboard(action_id)["inline_keyboard"],
+                    "model_used": settings.DEFAULT_MODEL,
+                }
+            else:
+                response_dict = {
+                    "response": result.get("text", "Nu am putut procesa cererea."),
+                    "intent": intent_result.intent.value,
+                    "target_agents": ["calendar_agent"],
+                    "model_used": settings.DEFAULT_MODEL,
+                }
+
+        elif intent_result.intent == IntentType.CALENDAR_CONFIRM_ACTION:
+            prompt_raw = user_prompt.strip()
+            action_id = prompt_raw.split(":", 1)[1].strip() if ":" in prompt_raw else prompt_raw
+            result = await self.calendar_agent.handle_confirm_action(user_id=uid, action_id=action_id)
             response_dict = {
-                "response": result["text"],
+                "response": result.get("text", "Acțiunea a fost confirmată."),
                 "intent": intent_result.intent.value,
                 "target_agents": ["calendar_agent"],
-                "model_used": settings.DEFAULT_MODEL
+                "model_used": settings.DEFAULT_MODEL,
+            }
+
+        elif intent_result.intent == IntentType.CALENDAR_CANCEL_ACTION:
+            prompt_raw = user_prompt.strip()
+            action_id = prompt_raw.split(":", 1)[1].strip() if ":" in prompt_raw else prompt_raw
+            result = await self.calendar_agent.handle_cancel_action(user_id=uid, action_id=action_id)
+            response_dict = {
+                "response": result.get("text", "Acțiunea a fost anulată."),
+                "intent": intent_result.intent.value,
+                "target_agents": ["calendar_agent"],
+                "model_used": settings.DEFAULT_MODEL,
             }
 
         # -------------------------------------------------------------

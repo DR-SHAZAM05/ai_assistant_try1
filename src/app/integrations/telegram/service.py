@@ -214,6 +214,40 @@ class TelegramService:
             logger.debug("Failed to send Telegram chat action %s: %s", action, exc)
             return False
 
+    async def get_me(self) -> Dict[str, Any]:
+        """Fetch bot identity information from Bot API."""
+        if not self._has_valid_token:
+            if settings.mocks_allowed:
+                return {"id": 0, "is_bot": True, "first_name": "MockBot", "username": "mock_bot"}
+            raise ConfigurationException("A valid TELEGRAM_BOT_TOKEN is required to call getMe")
+        try:
+            return await self._get("getMe")
+        except Exception as exc:
+            raise IntegrationException("Telegram getMe failed") from exc
+
+    async def get_webhook_info(self) -> Dict[str, Any]:
+        """Fetch current webhook status from Bot API."""
+        if not self._has_valid_token:
+            if settings.mocks_allowed:
+                return {"url": "", "has_custom_certificate": False, "pending_update_count": 0}
+            raise ConfigurationException("A valid TELEGRAM_BOT_TOKEN is required to call getWebhookInfo")
+        try:
+            return await self._get("getWebhookInfo")
+        except Exception as exc:
+            raise IntegrationException("Telegram getWebhookInfo failed") from exc
+
+    async def delete_webhook(self, drop_pending_updates: bool = False) -> bool:
+        """Delete current webhook from Bot API."""
+        if not self._has_valid_token:
+            if settings.mocks_allowed:
+                return True
+            raise ConfigurationException("A valid TELEGRAM_BOT_TOKEN is required to delete the Telegram webhook")
+        payload = {"drop_pending_updates": drop_pending_updates}
+        try:
+            return await self._post("deleteWebhook", payload)
+        except Exception as exc:
+            raise IntegrationException("Telegram deleteWebhook failed") from exc
+
     async def set_webhook(self, webhook_url: str, secret_token: Optional[str] = None) -> bool:
         if not self._has_valid_token:
             # Configuring a webhook changes external Bot API state. It must never
@@ -267,6 +301,16 @@ class TelegramService:
             )
         except Exception as exc:
             raise IntegrationException("Telegram sendDocument failed") from exc
+
+    async def _get(self, method: str) -> Dict[str, Any]:
+        async def request() -> httpx.Response:
+            async with httpx.AsyncClient(timeout=settings.EXTERNAL_REQUEST_TIMEOUT_SECONDS) as client:
+                return await client.get(f"{self.base_url}/{method}")
+
+        response = await retry_async(request, operation_name=f"telegram_{method}")
+        if response.status_code == 200 and response.json().get("ok", False):
+            return response.json().get("result", {})
+        raise IntegrationException(f"Telegram API returned HTTP {response.status_code}")
 
     async def _post(self, method: str, payload: Dict[str, Any], retry_without_parse_mode: bool = False) -> bool:
         async def request() -> httpx.Response:

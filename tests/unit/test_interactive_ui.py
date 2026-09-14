@@ -8,6 +8,7 @@ from src.app.integrations.telegram.service import (
     get_email_action_keyboard,
     get_documents_download_keyboard,
     get_main_menu_keyboard,
+    get_calendar_action_keyboard,
 )
 from src.app.orchestrator.orchestrator import AIOrchestrator
 from src.app.orchestrator.intent import IntentType
@@ -67,6 +68,50 @@ def test_documents_download_keyboard_structure():
     assert kb["inline_keyboard"][1][0]["callback_data"] == "all_docs_download"
 
 
+def test_calendar_action_keyboard_structure():
+    """get_calendar_action_keyboard returns proper confirm/cancel inline keyboard."""
+    action_id = "cal-action-abc-123"
+    kb = get_calendar_action_keyboard(action_id)
+    assert "inline_keyboard" in kb
+    row = kb["inline_keyboard"][0]
+    assert len(row) == 2
+    confirm_btn = row[0]
+    cancel_btn = row[1]
+    assert confirm_btn["callback_data"] == f"calendar_confirm:{action_id}"
+    assert cancel_btn["callback_data"] == f"calendar_cancel:{action_id}"
+    # Labels should contain meaningful text
+    assert len(confirm_btn["text"]) > 0
+    assert len(cancel_btn["text"]) > 0
+
+
+@pytest.mark.asyncio
+async def test_telegram_service_get_me_mock():
+    """get_me returns mock bot identity when no real token is configured."""
+    service = TelegramService(bot_token="dummy:NOTOKEN")
+    result = await service.get_me()
+    assert isinstance(result, dict)
+    assert "is_bot" in result
+    assert result["is_bot"] is True
+
+
+@pytest.mark.asyncio
+async def test_telegram_service_get_webhook_info_mock():
+    """get_webhook_info returns mock webhook info when no real token is configured."""
+    service = TelegramService(bot_token="dummy:NOTOKEN")
+    result = await service.get_webhook_info()
+    assert isinstance(result, dict)
+    assert "url" in result
+    assert "pending_update_count" in result
+
+
+@pytest.mark.asyncio
+async def test_telegram_service_delete_webhook_mock():
+    """delete_webhook succeeds gracefully in mock mode."""
+    service = TelegramService(bot_token="dummy:NOTOKEN")
+    result = await service.delete_webhook(drop_pending_updates=False)
+    assert result is True
+
+
 @pytest.mark.asyncio
 async def test_telegram_service_edit_message_mock(monkeypatch):
     service = TelegramService(bot_token="dummy:token")
@@ -100,6 +145,13 @@ async def test_orchestrator_callback_intent_detection():
 
     res_doc = await orchestrator.detect_intent("conventie_download", user_id="u1")
     assert res_doc.intent == IntentType.PRACTICE_DOCUMENT_REQUEST
+
+    # Calendar HITL callbacks
+    res_cal_confirm = await orchestrator.detect_intent("calendar_confirm:cal-abc-123", user_id="u1")
+    assert res_cal_confirm.intent == IntentType.CALENDAR_CONFIRM_ACTION
+
+    res_cal_cancel = await orchestrator.detect_intent("calendar_cancel:cal-abc-123", user_id="u1")
+    assert res_cal_cancel.intent == IntentType.CALENDAR_CANCEL_ACTION
 
 
 @pytest.mark.asyncio

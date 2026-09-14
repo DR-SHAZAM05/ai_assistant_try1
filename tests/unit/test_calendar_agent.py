@@ -100,3 +100,27 @@ async def test_calendar_agent_handle_create_event():
     assert isinstance(res["text"], str)
 
 
+# ---------------------------------------------------------------------------
+# Test: Mandatory Section 8 Dependency Injection Trace
+# ---------------------------------------------------------------------------
+
+def test_get_orchestrator_dependency_calendar_service_injection():
+    """
+    Mandatory Section 8 Unit Test:
+    Verify that get_orchestrator_dependency() returns an AIOrchestrator instance
+    whose CalendarAgent has an active CalendarService injected (not None).
+    """
+    from src.app.api.dependencies import get_orchestrator_dependency
+    from src.app.orchestrator.orchestrator import AIOrchestrator
+    from src.app.services.calendar_service import CalendarService
+
+    orchestrator = get_orchestrator_dependency()
+    assert isinstance(orchestrator, AIOrchestrator)
+    assert orchestrator.calendar_agent is not None, "orchestrator.calendar_agent must not be None"
+    assert orchestrator.calendar_agent.calendar_service is not None, (
+        "orchestrator.calendar_agent.calendar_service must not be None"
+    )
+    assert isinstance(orchestrator.calendar_agent.calendar_service, CalendarService)
+
+
+

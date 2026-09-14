@@ -5,10 +5,12 @@ from datetime import datetime, timedelta
 from typing import Optional, Any
 from zoneinfo import ZoneInfo
 
+from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.core.config import settings
 from src.app.core.logging import logger
+from src.app.database.session import AsyncSessionLocal
 from src.app.integrations.google_calendar.base import CalendarProvider
 from src.app.schemas.calendar import CalendarEventSchema, CalendarQueryFilter
 from src.app.services.pending_calendar_action_store import PendingCalendarActionStore
@@ -30,14 +32,27 @@ class CalendarService:
     def __init__(
         self,
         provider: CalendarProvider,
-        session: AsyncSession,
-        audit_service: AuditService,
+        session: Optional[AsyncSession] = None,
+        audit_service: Optional[AuditService] = None,
+        session_factory=AsyncSessionLocal,
     ):
         self.provider = provider
         self.session = session
-        self.store = PendingCalendarActionStore(session)
-        self.audit_service = audit_service
+        self.session_factory = session_factory
+        self.store = PendingCalendarActionStore(session) if session is not None else None
+        self.audit_service = audit_service or AuditService(session_factory=session_factory)
         self.timezone = ZoneInfo(settings.GOOGLE_CALENDAR_TIMEZONE)
+
+    @asynccontextmanager
+    async def _get_store(self):
+        if self.session is not None:
+            yield self.store
+            await self.session.commit()
+        else:
+            async with self.session_factory() as session:
+                store = PendingCalendarActionStore(session)
+                yield store
+                await session.commit()
 
     async def fetch_events(
         self,
@@ -117,12 +132,13 @@ class CalendarService:
             event.end_time,
         )
 
-        action_id = await self.store.save(
-            owner_id=user_id,
-            action_type="create",
-            payload=payload,
-            preview_text=preview,
-        )
+        async with self._get_store() as store:
+            action_id = await store.save(
+                owner_id=user_id,
+                action_type="create",
+                payload=payload,
+                preview_text=preview,
+            )
 
         logger.info(f"[CalendarService] User {user_id} requested CREATE event: {summary}")
         await self.audit_service.log_event(
@@ -194,12 +210,13 @@ class CalendarService:
         preview_lines.extend(["", "Dorești să aplic această modificare?"])
         preview = "\n".join(preview_lines)
 
-        action_id = await self.store.save(
-            owner_id=user_id,
-            action_type="update",
-            payload=payload,
-            preview_text=preview,
-        )
+        async with self._get_store() as store:
+            action_id = await store.save(
+                owner_id=user_id,
+                action_type="update",
+                payload=payload,
+                preview_text=preview,
+            )
 
         logger.info(f"[CalendarService] User {user_id} requested UPDATE event: {event_id}")
         await self.audit_service.log_event(
@@ -255,12 +272,13 @@ class CalendarService:
         )
         preview += "\n\nDorești să ștergi acest eveniment?"
 
-        action_id = await self.store.save(
-            owner_id=user_id,
-            action_type="delete",
-            payload=payload,
-            preview_text=preview,
-        )
+        async with self._get_store() as store:
+            action_id = await store.save(
+                owner_id=user_id,
+                action_type="delete",
+                payload=payload,
+                preview_text=preview,
+            )
 
         logger.info(f"[CalendarService] User {user_id} requested DELETE event: {event_id}")
         await self.audit_service.log_event(
@@ -289,75 +307,76 @@ class CalendarService:
         5. Execute provider
         6. Audit
         """
-        action = await self.store.get(action_id)
-        if not action:
-            raise ValueError("Acțiunea nu există.")
+        async with self._get_store() as store:
+            action = await store.get(action_id)
+            if not action:
+                raise ValueError("Acțiunea nu există.")
 
-        if action.owner_id != user_id:
-            raise PermissionError(
-                "Nu ai permisiunea să confirmi/anulezi această acțiune – aparține altui utilizator."
-            )
-
-        if action.status != "pending_approval":
-            raise ValueError("Acțiunea a fost deja procesată.")
-
-        if await self.store.is_expired(action_id):
-            await self.store.decide(action_id, "expired")
-            raise ValueError("Acțiunea a expirat. Te rog să o inițiezi din nou.")
-
-        try:
-            if action.action_type == "create":
-                event_data = action.payload["event"]
-                event = CalendarEventSchema(
-                    id=None,
-                    summary=event_data["summary"],
-                    description=event_data["description"],
-                    location=event_data["location"],
-                    start_time=datetime.fromisoformat(event_data["start_time"]),
-                    end_time=datetime.fromisoformat(event_data["end_time"]),
-                    is_all_day=event_data.get("is_all_day", False),
-                    status="confirmed",
+            if action.owner_id != user_id:
+                raise PermissionError(
+                    "Nu ai permisiunea să confirmi/anulezi această acțiune – aparține altui utilizator."
                 )
-                result = await self.provider.create_event(event)
-                result_summary = f"Eveniment creat: {result.summary}"
 
-            elif action.action_type == "update":
-                event_id = action.payload["event_id"]
-                updates = action.payload["updates"]
-                result = await self.provider.update_event(event_id, updates)
-                result_summary = f"Eveniment modificat: {updates.get('summary', 'N/A')}"
+            if action.status != "pending_approval":
+                raise ValueError("Acțiunea a fost deja procesată.")
 
-            elif action.action_type == "delete":
-                event_id = action.payload["event_id"]
-                result = await self.provider.delete_event(event_id)
-                result_summary = f"Eveniment șters"
+            if await store.is_expired(action_id):
+                await store.decide(action_id, "expired")
+                raise ValueError("Acțiunea a expirat. Te rog să o inițiezi din nou.")
 
-            else:
-                raise ValueError(f"Tip acțiune necunoscut: {action.action_type}")
+            try:
+                if action.action_type == "create":
+                    event_data = action.payload["event"]
+                    event = CalendarEventSchema(
+                        id=None,
+                        summary=event_data["summary"],
+                        description=event_data["description"],
+                        location=event_data["location"],
+                        start_time=datetime.fromisoformat(event_data["start_time"]),
+                        end_time=datetime.fromisoformat(event_data["end_time"]),
+                        is_all_day=event_data.get("is_all_day", False),
+                        status="confirmed",
+                    )
+                    result = await self.provider.create_event(event)
+                    result_summary = f"Eveniment creat: {result.summary}"
 
-            await self.store.decide(action_id, "approved")
+                elif action.action_type == "update":
+                    event_id = action.payload["event_id"]
+                    updates = action.payload["updates"]
+                    result = await self.provider.update_event(event_id, updates)
+                    result_summary = f"Eveniment modificat: {updates.get('summary', 'N/A')}"
 
-            await self.audit_service.log_event(
-                user_id=user_id,
-                user_request=f"{action.action_type.upper()}: Confirmat",
-                selected_tool="calendar_confirm_action",
-                status="success",
-                external_operation=f"calendar.{action.action_type}.confirmed",
-            )
+                elif action.action_type == "delete":
+                    event_id = action.payload["event_id"]
+                    result = await self.provider.delete_event(event_id)
+                    result_summary = f"Eveniment șters"
 
-            logger.info(f"[CalendarService] User {user_id} confirmed {action.action_type}: {action_id}")
-            return result_summary
+                else:
+                    raise ValueError(f"Tip acțiune necunoscut: {action.action_type}")
 
-        except Exception as exc:
-            await self.audit_service.log_event(
-                user_id=user_id,
-                user_request=f"{action.action_type.upper()}: Eșec",
-                selected_tool="calendar_confirm_action",
-                status="error",
-                external_operation=f"calendar.{action.action_type}.failed",
-            )
-            logger.error(f"[CalendarService] confirm_action failed: {exc}")
-            raise
+                await store.decide(action_id, "approved")
+
+                await self.audit_service.log_event(
+                    user_id=user_id,
+                    user_request=f"{action.action_type.upper()}: Confirmat",
+                    selected_tool="calendar_confirm_action",
+                    status="success",
+                    external_operation=f"calendar.{action.action_type}.confirmed",
+                )
+
+                logger.info(f"[CalendarService] User {user_id} confirmed {action.action_type}: {action_id}")
+                return result_summary
+
+            except Exception as exc:
+                await self.audit_service.log_event(
+                    user_id=user_id,
+                    user_request=f"{action.action_type.upper()}: Eșec",
+                    selected_tool="calendar_confirm_action",
+                    status="error",
+                    external_operation=f"calendar.{action.action_type}.failed",
+                )
+                logger.error(f"[CalendarService] confirm_action failed: {exc}")
+                raise
 
     async def cancel_action(
         self,
@@ -375,34 +394,35 @@ class CalendarService:
         5. Does NOT execute provider
         6. Audit
         """
-        action = await self.store.get(action_id)
-        if not action:
-            raise ValueError("Acțiunea nu există.")
+        async with self._get_store() as store:
+            action = await store.get(action_id)
+            if not action:
+                raise ValueError("Acțiunea nu există.")
 
-        if action.owner_id != user_id:
-            raise PermissionError(
-                "Nu ai permisiunea să confirmi/anulezi această acțiune – aparține altui utilizator."
+            if action.owner_id != user_id:
+                raise PermissionError(
+                    "Nu ai permisiunea să confirmi/anulezi această acțiune – aparține altui utilizator."
+                )
+
+            if action.status != "pending_approval":
+                raise ValueError("Acțiunea a fost deja procesată.")
+
+            if await store.is_expired(action_id):
+                await store.decide(action_id, "expired")
+                raise ValueError("Acțiunea a expirat.")
+
+            await store.decide(action_id, "rejected")
+
+            await self.audit_service.log_event(
+                user_id=user_id,
+                user_request=f"{action.action_type.upper()}: Anulat",
+                selected_tool="calendar_cancel_action",
+                status="cancelled",
+                external_operation=f"calendar.{action.action_type}.rejected",
             )
 
-        if action.status != "pending_approval":
-            raise ValueError("Acțiunea a fost deja procesată.")
-
-        if await self.store.is_expired(action_id):
-            await self.store.decide(action_id, "expired")
-            raise ValueError("Acțiunea a expirat.")
-
-        await self.store.decide(action_id, "rejected")
-
-        await self.audit_service.log_event(
-            user_id=user_id,
-            user_request=f"{action.action_type.upper()}: Anulat",
-            selected_tool="calendar_cancel_action",
-            status="cancelled",
-            external_operation=f"calendar.{action.action_type}.rejected",
-        )
-
-        logger.info(f"[CalendarService] User {user_id} cancelled {action.action_type}: {action_id}")
-        return f"Acțiunea a fost anulată ({action.action_type})."
+            logger.info(f"[CalendarService] User {user_id} cancelled {action.action_type}: {action_id}")
+            return f"Acțiunea a fost anulată ({action.action_type})."
 
     def _build_preview(
         self,

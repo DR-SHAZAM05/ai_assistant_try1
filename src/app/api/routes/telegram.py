@@ -76,11 +76,19 @@ async def telegram_webhook(
         )
         if not decision.allowed:
             logger.warning("Rate-limited Telegram message from user %s", sender_id)
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Too many Telegram requests. Please retry later.",
-                headers={"Retry-After": str(decision.retry_after_seconds)},
-            )
+            retry_after = getattr(decision, "retry_after_seconds", 30)
+            try:
+                await telegram_service.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"⚠️ Ai trimis prea multe mesaje. "
+                        f"Te rog să aștepți **{retry_after} secunde** înainte de a trimite din nou."
+                    ),
+                )
+            except Exception:
+                pass
+            return {"status": "rate_limited", "retry_after": retry_after}
+
 
     logger.info("Incoming Telegram message accepted (text_length=%s).", len(user_text))
 

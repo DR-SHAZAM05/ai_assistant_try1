@@ -12,6 +12,9 @@ from src.app.llm.factory import get_llm_provider
 from src.app.services.calendar_service import CalendarService
 
 
+_DEFAULT = object()
+
+
 class CalendarAgent:
     """
     Calendar Agent: Parses natural language date ranges, formats calendar responses,
@@ -20,14 +23,43 @@ class CalendarAgent:
 
     def __init__(
         self,
-        calendar_service: Optional[CalendarService] = None,
+        calendar_service: Any = _DEFAULT,
         llm_provider=None,
     ):
-        self.calendar_service = calendar_service
+        if calendar_service is _DEFAULT:
+            try:
+                from src.app.integrations.google_calendar.factory import get_calendar_provider
+                from src.app.database.session import AsyncSessionLocal
+                provider = get_calendar_provider()
+                if provider is not None:
+                    self.calendar_service = CalendarService(
+                        provider=provider,
+                        session_factory=AsyncSessionLocal,
+                    )
+                else:
+                    self.calendar_service = None
+            except Exception as exc:
+                logger.warning("Default CalendarService initialization note: %s: %s", type(exc).__name__, exc)
+                self.calendar_service = None
+        else:
+            self.calendar_service = calendar_service
+
         self.llm = llm_provider or get_llm_provider()
         self.tz = ZoneInfo(settings.GOOGLE_CALENDAR_TIMEZONE)
         # Fallback read-only provider for handle_calendar_query when no CalendarService is injected
         self._read_provider = self._build_read_provider()
+
+    @staticmethod
+    def _extract_json(text: str) -> Dict[str, Any]:
+        """Extract and parse JSON from LLM response text, tolerating markdown and surrounding prose."""
+        cleaned = text.strip()
+        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        return json.loads(cleaned)
 
     def _build_read_provider(self):
         """Build a read-only CalendarProvider for fetch_events queries without a DB session."""
@@ -129,18 +161,36 @@ class CalendarAgent:
                 f"Dacă ora de sfârșit nu e menționată, seteaz-o la 1 oră după start."
             )
 
-            llm_response = await self.llm.generate_completion(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                temperature=0.1,
-            )
+            try:
+                llm_response = await self.llm.generate_completion(
+                    prompt=user_prompt,
+                    system_prompt=system_prompt,
+                    temperature=0.1,
+                )
+            except TypeError:
+                llm_response = await self.llm.generate_completion(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=0.1,
+                )
 
-            clean_json = llm_response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-            event_data = json.loads(clean_json)
+            raw_text = (
+                llm_response.get("content", "")
+                if isinstance(llm_response, dict)
+                else str(llm_response)
+            )
+            event_data = self._extract_json(raw_text)
 
             summary = event_data.get("summary") or "Eveniment nou"
-            start_dt = datetime.fromisoformat(event_data["start_time"])
-            end_dt = datetime.fromisoformat(event_data["end_time"])
+            start_raw = event_data.get("start_time")
+            if not start_raw:
+                raise ValueError("Nu am putut identifica data și ora de început a evenimentului.")
+            start_dt = datetime.fromisoformat(start_raw)
+            end_raw = event_data.get("end_time")
+            if end_raw:
+                end_dt = datetime.fromisoformat(end_raw)
+            else:
+                end_dt = start_dt + timedelta(hours=1)
             location = event_data.get("location")
             description = event_data.get("description")
 
@@ -205,14 +255,25 @@ class CalendarAgent:
                 f'}}\n'
             )
 
-            llm_response = await self.llm.generate_completion(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                temperature=0.1,
-            )
+            try:
+                llm_response = await self.llm.generate_completion(
+                    prompt=user_prompt,
+                    system_prompt=system_prompt,
+                    temperature=0.1,
+                )
+            except TypeError:
+                llm_response = await self.llm.generate_completion(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=0.1,
+                )
 
-            clean_json = llm_response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-            parsed = json.loads(clean_json)
+            raw_text = (
+                llm_response.get("content", "")
+                if isinstance(llm_response, dict)
+                else str(llm_response)
+            )
+            parsed = self._extract_json(raw_text)
 
             event_query = parsed.get("event_query", "").strip()
             updates_raw = parsed.get("updates", {})
@@ -282,14 +343,25 @@ class CalendarAgent:
                 f'}}\n'
             )
 
-            llm_response = await self.llm.generate_completion(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                temperature=0.1,
-            )
+            try:
+                llm_response = await self.llm.generate_completion(
+                    prompt=user_prompt,
+                    system_prompt=system_prompt,
+                    temperature=0.1,
+                )
+            except TypeError:
+                llm_response = await self.llm.generate_completion(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=0.1,
+                )
 
-            clean_json = llm_response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-            parsed = json.loads(clean_json)
+            raw_text = (
+                llm_response.get("content", "")
+                if isinstance(llm_response, dict)
+                else str(llm_response)
+            )
+            parsed = self._extract_json(raw_text)
 
             event_query = parsed.get("event_query", "").strip()
             if not event_query:

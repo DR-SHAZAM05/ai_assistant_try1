@@ -110,8 +110,11 @@ def test_telegram_webhook_enforces_per_user_rate_limit(monkeypatch):
 
     assert client.post("/api/v1/telegram/webhook", json=payload, headers=headers).status_code == 200
     limited = client.post("/api/v1/telegram/webhook", json=payload, headers=headers)
-    assert limited.status_code == 429
-    assert int(limited.headers["Retry-After"]) > 0
+    # Telegram must always receive HTTP 200 — rate-limit is communicated via the chat message
+    assert limited.status_code == 200
+    limited_data = limited.json()
+    assert limited_data["status"] == "rate_limited"
+    assert "retry_after" in limited_data
 
 
 def test_setup_webhook_requires_a_configured_secret(monkeypatch):
@@ -129,3 +132,24 @@ def test_webhook_does_not_bypass_a_configured_placeholder_secret(monkeypatch):
     response = client.post("/api/v1/telegram/webhook", json=payload)
 
     assert response.status_code == 401
+
+
+def test_webhook_rejects_unauthorized_user_when_allowlist_configured(monkeypatch):
+    """When an allow-list is configured, users not on it receive HTTP 403."""
+    monkeypatch.setattr(settings, "TELEGRAM_ALLOWED_USER_IDS", "111222333")
+    headers = {}
+    if settings.TELEGRAM_WEBHOOK_SECRET:
+        headers["x-telegram-bot-api-secret-token"] = settings.TELEGRAM_WEBHOOK_SECRET
+
+    payload = {
+        "update_id": 500001,
+        "message": {
+            "message_id": 1,
+            "date": 1700000000,
+            "chat": {"id": 999999, "type": "private", "first_name": "Stranger"},
+            "from": {"id": 999999, "is_bot": False, "first_name": "Stranger"},
+            "text": "Hello",
+        },
+    }
+    response = client.post("/api/v1/telegram/webhook", json=payload, headers=headers)
+    assert response.status_code == 403
