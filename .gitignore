@@ -83,3 +83,5 @@ service_account*.json
 # Local configuration
 config/news.yaml
 config/practice.yaml
+*.docx
+create_professional_docs.py
