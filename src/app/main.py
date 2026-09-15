@@ -113,7 +113,7 @@ async def _qdrant_ready() -> bool:
         client = AsyncQdrantClient(
             url=settings.effective_qdrant_url,
             api_key=settings.QDRANT_API_KEY,
-            timeout=3.0,
+            timeout=3,
         )
         await client.get_collections()
         return True
@@ -136,7 +136,7 @@ async def _ollama_ready() -> bool:
         required_models.add(_normalise_ollama_model_name(settings.EMBEDDING_MODEL))
 
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        async with httpx.AsyncClient(timeout=3) as client:
             response = await client.get(f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/tags")
             response.raise_for_status()
         models = response.json().get("models", [])

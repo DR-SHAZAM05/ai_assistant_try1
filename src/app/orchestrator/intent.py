@@ -27,6 +27,7 @@ class IntentType(str, Enum):
     PRACTICE_DOCUMENT_REQUEST = "practice_document_request"
     NEWS_QUERY = "news_query"
     TASKS_QUERY = "tasks_query"
+    TASKS_CREATE = "tasks_create"
 
     # Multi-Tool Synthesis & Long-Term Memory
     MEMORY_MANAGE = "memory_manage"

@@ -69,6 +69,11 @@ class AIOrchestrator:
                 description="List open tasks and action items from PostgreSQL database.",
                 func=self.action_item_service.list_action_items
             )
+            self.tool_registry.register_tool(
+                name="tasks_create",
+                description="Create a new task or action item in PostgreSQL database.",
+                func=self.action_item_service.create_action_item
+            )
             # Email tools
             self.tool_registry.register_tool(
                 name="email_search",
@@ -438,6 +443,19 @@ class AIOrchestrator:
             "finalizează sarcina", "finalizeaza sarcina", "rezolvă sarcina", "rezolva sarcina",
             "marchează task", "marcheaza task", "bifează task", "bifeaza task", "finalizat task"
         ]
+        task_create_keywords = [
+            "adaugă sarcina", "adauga sarcina", "adaugă task", "adauga task",
+            "creează sarcina", "creeaza sarcina", "creează task", "creeaza task",
+            "sarcină nouă", "sarcina noua", "task nou", "task nou",
+            "adaugă o sarcină", "adauga o sarcina", "creează o sarcină", "creeaza o sarcina",
+            "adaug o sarcina", "creez o sarcina", "adaug un task", "creez un task"
+        ]
+        if any(kw in prompt_clean for kw in task_create_keywords):
+            return IntentDetectionResult(
+                intent=IntentType.TASKS_CREATE,
+                confidence=0.95,
+                target_agents=["action_item_service"]
+            )
         if any(kw in prompt_clean for kw in task_list_keywords) or any(kw in prompt_clean for kw in task_complete_keywords):
             return IntentDetectionResult(
                 intent=IntentType.TASKS_QUERY,
@@ -529,7 +547,7 @@ class AIOrchestrator:
                 wants_logbook = True
 
             doc_items: List[Dict[str, Any]] = []
-            deadlines_by_id = {d.get("id"): d for d in get_practice_deadlines()}
+            deadlines_by_id = {d.get("id"): d for d in get_practice_deadlines() if d.get("id")}
             conv_deadline = deadlines_by_id.get("conventie", {}).get("display_date", "28 August 2026")
             logbook_deadline = deadlines_by_id.get("caiet", {}).get("display_date", "2 Septembrie 2026")
             current_year = get_current_academic_year()
@@ -797,6 +815,94 @@ class AIOrchestrator:
         # -------------------------------------------------------------
         # 5. TASKS / ACTION ITEMS EXECUTION
         # -------------------------------------------------------------
+        elif intent_result.intent == IntentType.TASKS_CREATE:
+            import re
+            prompt_clean = user_prompt.lower().strip()
+            prompt_raw = user_prompt.strip()
+            
+            # Extract task title from various patterns
+            task_title = None
+            priority = "medium"
+            deadline = None
+            
+            # Pattern: "Adaugă sarcina: Title" or "Adauga task: Title"
+            if ":" in prompt_raw:
+                parts = prompt_raw.split(":", 1)
+                if len(parts) == 2:
+                    task_title = parts[1].strip()
+            else:
+                # Try to extract task title after keywords
+                for keyword in ["sarcina", "task", "sarcini", "taskuri"]:
+                    if keyword in prompt_clean:
+                        idx = prompt_clean.find(keyword)
+                        potential_title = prompt_raw[idx + len(keyword):].strip()
+                        # Remove common stopwords at the beginning
+                        for stopword in [" noua", " nou", ":", "-", "–"]:
+                            if potential_title.lower().startswith(stopword):
+                                potential_title = potential_title[len(stopword):].strip()
+                        if potential_title:
+                            task_title = potential_title
+                            break
+            
+            # If no title found, use the whole prompt as title (cleaned)
+            if not task_title:
+                task_title = prompt_raw
+            
+            # Extract priority if mentioned
+            if "prioritate" in prompt_clean or "priority" in prompt_clean:
+                if "mare" in prompt_clean or "ridicata" in prompt_clean or "high" in prompt_clean:
+                    priority = "high"
+                elif "mică" in prompt_clean or "mica" in prompt_clean or "low" in prompt_clean:
+                    priority = "low"
+            
+            # Extract deadline if mentioned (simple pattern for now)
+            deadline_match = re.search(r'(până|pana|by|until)\s+(\d{1,2})[.\-/](\d{1,2})[.\-/]?(\d{2,4})?', prompt_clean)
+            if deadline_match:
+                try:
+                    from datetime import datetime
+                    day = int(deadline_match.group(2))
+                    month = int(deadline_match.group(3))
+                    year = int(deadline_match.group(4)) if deadline_match.group(4) else datetime.now().year
+                    deadline = datetime(year, month, day)
+                except Exception:
+                    pass
+            
+            # Create the action item
+            try:
+                created_item = await self.action_item_service.create_action_item(
+                    title=task_title,
+                    source="telegram",
+                    priority=priority,
+                    deadline=deadline,
+                    user_id=uid,
+                )
+                
+                lines = [
+                    f"OK **Sarcina a fost creata cu succes!**\n",
+                    f"**[Task #{created_item['id']}]** {created_item['title']}",
+                    f"   • Prioritate: **{priority.upper()}**",
+                    f"   • Sursa: `Telegram`",
+                ]
+                if deadline:
+                    lines.append(f"   • Deadline: `{deadline.strftime('%d.%m.%Y')}`")
+                lines.append("")
+                lines.append("INFO Poti vedea toate sarcinile tale tastand: *\"Ce sarcini am?\"*")
+                
+                response_dict = {
+                    "response": "\n".join(lines),
+                    "intent": intent_result.intent.value,
+                    "target_agents": ["action_item_service"],
+                    "model_used": "action_item_database"
+                }
+            except Exception as exc:
+                logger.error(f"Failed to create action item: {exc}")
+                response_dict = {
+                    "response": f"WARNING Nu am putut crea sarcina. Eroare: {str(exc)}",
+                    "intent": intent_result.intent.value,
+                    "target_agents": ["action_item_service"],
+                    "model_used": "action_item_database"
+                }
+        
         elif intent_result.intent == IntentType.TASKS_QUERY:
             import re
             prompt_lower = user_prompt.lower().strip()
@@ -846,7 +952,10 @@ class AIOrchestrator:
                         pri = it.get("priority", "medium").lower()
                         pri_emoji = "🔴" if pri == "high" else ("🟡" if pri == "medium" else "🟢")
                         deadline_val = it.get("deadline")
-                        deadline_str = deadline_val.strftime("%d.%m.%Y %H:%M") if hasattr(deadline_val, "strftime") else (str(deadline_val) if deadline_val else "Nespecificat")
+                        if deadline_val and hasattr(deadline_val, "strftime"):
+                            deadline_str = deadline_val.strftime("%d.%m.%Y %H:%M")
+                        else:
+                            deadline_str = str(deadline_val) if deadline_val else "Nespecificat"
 
                         lines.append(f"{idx}. {pri_emoji} **[Task #{it['id']}]** {it['title']}")
                         lines.append(f"   • Prioritate: **{pri.upper()}**")
@@ -892,7 +1001,10 @@ class AIOrchestrator:
                         pri = it.get("priority", "medium").lower()
                         pri_emoji = "🔴" if pri == "high" else ("🟡" if pri == "medium" else "🟢")
                         deadline_val = it.get("deadline")
-                        deadline_str = deadline_val.strftime("%d.%m.%Y %H:%M") if hasattr(deadline_val, "strftime") else (str(deadline_val) if deadline_val else "Fără deadline")
+                        if deadline_val and hasattr(deadline_val, "strftime"):
+                            deadline_str = deadline_val.strftime("%d.%m.%Y %H:%M")
+                        else:
+                            deadline_str = str(deadline_val) if deadline_val else "Fără deadline"
                         lines.append(f"{idx}. {pri_emoji} **[Task #{it['id']}]** {it['title']} (Deadline: `{deadline_str}`)")
                 else:
                     lines.append("✅ Nicio sarcină restantă în baza de date! Ești la zi cu toate activitățile.")
@@ -932,7 +1044,8 @@ class AIOrchestrator:
             lines.append(f"🎓 **Termene Limită Practică UNITBV (Anul {current_year})**:")
             icon_map = {"conventie": "📄", "caiet": "📘", "colocviu": "🎯"}
             for dl in get_practice_deadlines():
-                ic = icon_map.get(dl.get("id"), "📌")
+                dl_id = dl.get("id")
+                ic = icon_map.get(dl_id, "📌") if dl_id else "📌"
                 lines.append(f"• {ic} **{dl.get('display_date')}**: {dl.get('description')}")
             lines.append("")
             lines.append("💡 *Apasă pe butoanele de mai jos pentru a gestiona direct sarcinile sau a descărca documentele necesare.*")
@@ -1000,7 +1113,9 @@ class AIOrchestrator:
             # UNITBV / Practică Status (Section 17: UNITBV / PRACTICĂ)
             briefing_lines.append("🎓 **UNITBV / Practică Studențească**:")
             for dl in get_practice_deadlines()[:2]:
-                briefing_lines.append(f"• Termen limită {dl.get('title', '')}: **{dl.get('display_date', '')}**")
+                dl_title = dl.get('title', '') if dl else ''
+                dl_date = dl.get('display_date', '') if dl else ''
+                briefing_lines.append(f"• Termen limită {dl_title}: **{dl_date}**")
             briefing_lines.append("")
 
             # Open Tasks (Section 17: ACTION ITEMS)
