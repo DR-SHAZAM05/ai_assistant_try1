@@ -106,6 +106,8 @@ personal-academic-ai-assistant/
 │   ├── run_automation.py          # Utilitar CLI unificat pentru joburi automate
 │   ├── backup.py                  # Salvare PostgreSQL + Snapshot Qdrant (SHA-256)
 │   ├── restore.py                 # Restaurare date cu verificare de integritate
+│   ├── verify_restore.py          # Verificare restore în containere izolate temporare
+│   ├── retention.py               # Politică de retenție pentru backup-uri vechi
 │   └── authorize_google_calendar.py
 │
 ├── src/
@@ -282,6 +284,28 @@ Procedura include verificarea integrității datelor prin sume de control:
   ```powershell
   python -m scripts.restore backups/<timestamp> --yes
   ```
+
+- **Verificare Restore Izolat**:
+  ```powershell
+  python -m scripts.verify_restore backups/<timestamp>
+  ```
+  Restaurează backup-ul în containere temporare izolate (PostgreSQL pe port 15432, Qdrant pe port 16333), verifică integritatea datelor, funcționalitatea RAG și izolarea utilizatorilor, apoi curăță automat containerele temporare. NU modifică mediul de producție/development.
+
+- **Politica de Retenție**:
+  ```powershell
+  # Vizualizare ce ar fi șters (dry-run):
+  python -m scripts.retention --dry-run
+
+  # Ștergere efectivă a backup-urilor expirate:
+  python -m scripts.retention
+  ```
+  Backup-urile mai vechi de `BACKUP_RETENTION_DAYS` (implicit 7 zile) sunt șterse automat. Directorul `backups/validation/` este protejat și nu este niciodată șters.
+
+**Configurare** (în `.env`):
+- `BACKUP_DIR=backups` - directorul pentru backup-uri
+- `BACKUP_RETENTION_DAYS=7` - zile de retenție
+
+**Fallback Qdrant**: Dacă snapshot-ul Qdrant nu este disponibil, vectorii pot fi re-generați din `practice_documents` (PostgreSQL) prin re-embedding folosind `python -m src.app.rag.ingest`.
 
 ---
 

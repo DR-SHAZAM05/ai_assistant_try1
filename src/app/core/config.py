@@ -159,6 +159,10 @@ class Settings(BaseSettings):
     TELEGRAM_RATE_LIMIT_REQUESTS: int = 30
     RATE_LIMIT_MAX_TRACKED_KEYS: int = 10_000
 
+    # Backup & Restore
+    BACKUP_DIR: str = "backups"
+    BACKUP_RETENTION_DAYS: int = 7
+
     @property
     def is_production(self) -> bool:
         return self.APP_ENV.lower() in {"production", "prod"}
