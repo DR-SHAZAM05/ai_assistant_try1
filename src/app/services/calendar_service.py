@@ -308,7 +308,7 @@ class CalendarService:
         6. Audit
         """
         async with self._get_store() as store:
-            action = await store.get(action_id)
+            action = await store.get_for_update(action_id)
             if not action:
                 raise ValueError("Acțiunea nu există.")
 
@@ -323,6 +323,12 @@ class CalendarService:
             if await store.is_expired(action_id):
                 await store.decide(action_id, "expired")
                 raise ValueError("Acțiunea a expirat. Te rog să o inițiezi din nou.")
+
+            # Atomically lock and transition status before calling provider to guarantee no duplicate executions
+            action.status = "approved"
+            from datetime import datetime as dt_cls, timezone
+            action.decided_at = dt_cls.now(timezone.utc).replace(tzinfo=None)
+            await store.session.flush()
 
             try:
                 if action.action_type == "create":
@@ -354,8 +360,6 @@ class CalendarService:
                 else:
                     raise ValueError(f"Tip acțiune necunoscut: {action.action_type}")
 
-                await store.decide(action_id, "approved")
-
                 await self.audit_service.log_event(
                     user_id=user_id,
                     user_request=f"{action.action_type.upper()}: Confirmat",
@@ -368,6 +372,8 @@ class CalendarService:
                 return result_summary
 
             except Exception as exc:
+                action.status = "failed"
+                await store.session.flush()
                 await self.audit_service.log_event(
                     user_id=user_id,
                     user_request=f"{action.action_type.upper()}: Eșec",
@@ -395,7 +401,7 @@ class CalendarService:
         6. Audit
         """
         async with self._get_store() as store:
-            action = await store.get(action_id)
+            action = await store.get_for_update(action_id)
             if not action:
                 raise ValueError("Acțiunea nu există.")
 
@@ -411,7 +417,10 @@ class CalendarService:
                 await store.decide(action_id, "expired")
                 raise ValueError("Acțiunea a expirat.")
 
-            await store.decide(action_id, "rejected")
+            action.status = "rejected"
+            from datetime import datetime as dt_cls, timezone
+            action.decided_at = dt_cls.now(timezone.utc).replace(tzinfo=None)
+            await store.session.flush()
 
             await self.audit_service.log_event(
                 user_id=user_id,

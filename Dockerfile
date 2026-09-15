@@ -55,6 +55,10 @@ RUN useradd -m -u 1000 appuser && \
 # Copy application source code
 COPY --chown=appuser:appuser . .
 
+# Restrict the Google service account key to owner-read-only (least privilege).
+# Must be done before USER is switched since chmod requires write access to parent dir.
+RUN if [ -f secrets/service_account.json ]; then chmod 400 secrets/service_account.json; fi
+
 # Switch to non-root user
 USER appuser
 

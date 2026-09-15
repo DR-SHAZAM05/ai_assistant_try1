@@ -65,6 +65,16 @@ class PendingCalendarActionStore:
         result = await self.session.execute(stmt)
         return result.scalars().first()
 
+    async def get_for_update(self, action_id: str) -> Optional[PendingCalendarAction]:
+        """Retrieve a pending action by ID with row-level exclusive lock (FOR UPDATE)."""
+        stmt = (
+            select(PendingCalendarAction)
+            .where(PendingCalendarAction.action_id == action_id)
+            .with_for_update()
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().first()
+
     async def get_for_user(
         self, action_id: str, owner_id: str
     ) -> Optional[PendingCalendarAction]:
@@ -77,6 +87,26 @@ class PendingCalendarActionStore:
                 PendingCalendarAction.action_id == action_id,
                 PendingCalendarAction.owner_id == owner_id,
             )
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().first()
+
+    async def get_for_user_for_update(
+        self, action_id: str, owner_id: str
+    ) -> Optional[PendingCalendarAction]:
+        """
+        Retrieve action with exclusive row lock only if it belongs to the specified user.
+        Cross-user security and concurrency check.
+        """
+        stmt = (
+            select(PendingCalendarAction)
+            .where(
+                and_(
+                    PendingCalendarAction.action_id == action_id,
+                    PendingCalendarAction.owner_id == owner_id,
+                )
+            )
+            .with_for_update()
         )
         result = await self.session.execute(stmt)
         return result.scalars().first()

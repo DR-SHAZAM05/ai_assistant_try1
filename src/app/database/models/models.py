@@ -1,7 +1,8 @@
 from sqlalchemy import (
     Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Float, JSON, Enum,
-    UniqueConstraint
+    UniqueConstraint, Index
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, relationship
 from datetime import datetime
 import enum
@@ -24,9 +25,12 @@ class ActionStatusEnum(str, enum.Enum):
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        Index("ix_users_telegram_chat_id", "telegram_chat_id"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    telegram_chat_id = Column(String(64), unique=True, index=True, nullable=True)
+    telegram_chat_id = Column(String(64), unique=True, nullable=True)
     full_name = Column(String(128), nullable=False)
     preferred_language = Column(String(10), default="ro")
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -34,9 +38,12 @@ class User(Base):
 
 class AcademicYear(Base):
     __tablename__ = "academic_years"
+    __table_args__ = (
+        Index("ix_academic_years_year_code", "year_code"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    year_code = Column(String(32), unique=True, index=True, nullable=False) # e.g. "2025-2026"
+    year_code = Column(String(32), unique=True, nullable=False) # e.g. "2025-2026"
     is_active = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -77,12 +84,15 @@ class Email(Base):
 
 class PendingCalendarAction(Base):
     __tablename__ = "pending_calendar_actions"
+    __table_args__ = (
+        Index("ix_pending_calendar_actions_action_id", "action_id"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    action_id = Column(String(64), unique=True, index=True, nullable=False)
+    action_id = Column(String(64), unique=True, nullable=False)
     owner_id = Column(String(64), index=True, nullable=False)
     action_type = Column(String(32), nullable=False)  # e.g., create, update, delete
-    payload = Column(JSON, nullable=False)  # raw data needed for the action
+    payload = Column(JSONB().with_variant(JSON, "sqlite"), nullable=False)  # raw data needed for the action
     preview_text = Column(Text, nullable=False)  # markdown preview shown to user
     status = Column(String(32), index=True, nullable=False, default="pending_approval")
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -92,9 +102,12 @@ class PendingCalendarAction(Base):
 
 class PendingEmailDraft(Base):
     __tablename__ = "pending_email_drafts"
+    __table_args__ = (
+        Index("ix_pending_email_drafts_draft_id", "draft_id", unique=True),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    draft_id = Column(String(64), unique=True, index=True, nullable=False)
+    draft_id = Column(String(64), unique=True, nullable=False)
     owner_id = Column(String(64), index=True, nullable=False)
     original_message_id = Column(String(256), nullable=False)
     account_type = Column(String(32), nullable=False)
@@ -143,10 +156,10 @@ class PracticeAnswer(Base):
 class PracticeDocument(Base):
     __tablename__ = "practice_documents"
     __table_args__ = (
-        UniqueConstraint("academic_year", "file_path", "qdrant_collection", name="uq_practice_document_year_path_collection"),
+        Index("uq_practice_document_year_path_collection", "academic_year", "file_path", "qdrant_collection", unique=True),
     )
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     document_id = Column(String(256), index=True, nullable=False)
     academic_year = Column(String(32), index=True, nullable=False)
     file_name = Column(String(256), nullable=False)
