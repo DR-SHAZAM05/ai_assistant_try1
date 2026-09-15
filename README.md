@@ -73,7 +73,7 @@ The system follows a modular microservices architecture with provider abstractio
 graph TD
     User[User] --> Telegram[Telegram Bot]
     User --> API[FastAPI API]
-    Telegram --> Webhook[/Webhook Endpoint]
+    Telegram --> Webhook[Webhook Endpoint]
     API --> Orchestrator[AI Orchestrator]
     Webhook --> Orchestrator
     Orchestrator --> Intent[Intent Detection]
